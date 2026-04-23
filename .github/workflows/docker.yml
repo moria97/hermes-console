@@ -9,8 +9,10 @@ on:
   workflow_dispatch:
 
 env:
-  REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
+  GHCR_REGISTRY: ghcr.io
+  GHCR_IMAGE: ${{ github.repository }}
+  ACR_REGISTRY: registry.cn-hangzhou.aliyuncs.com
+  ACR_IMAGE: registry.cn-hangzhou.aliyuncs.com/mybigpai/hermes-console
 
 jobs:
   build:
@@ -26,30 +28,49 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      # Only log in when we intend to push (never on PRs from forks).
+      # Date-based tag (YYYY.M.D, no zero padding), e.g. 2026.4.23 — matches the
+      # version scheme used internally for pai-eas releases.
+      - name: Compute date tag
+        id: date
+        run: echo "value=$(date +%Y.%-m.%-d)" >> "$GITHUB_OUTPUT"
+
+      # Only log in to registries when we're actually pushing (skip PRs from
+      # forks; their GITHUB_TOKEN can't write to GHCR and ACR secrets leak).
       - name: Login to GHCR
         if: github.event_name != 'pull_request'
         uses: docker/login-action@v3
         with:
-          registry: ${{ env.REGISTRY }}
+          registry: ${{ env.GHCR_REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Login to Aliyun ACR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.ACR_REGISTRY }}
+          username: ${{ secrets.ACR_USER }}
+          password: ${{ secrets.ACR_SECRET }}
 
       - name: Extract metadata (tags + labels)
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          # Each tag rule below is applied to BOTH images — single build,
+          # pushed to ghcr.io and Aliyun ACR in one step.
+          images: |
+            ${{ env.GHCR_REGISTRY }}/${{ env.GHCR_IMAGE }}
+            ${{ env.ACR_IMAGE }}
           tags: |
-            # Branch push: hermes-console:main, hermes-console:main-<short-sha>
+            # Date tag (primary) — e.g. 2026.4.23
+            type=raw,value=${{ steps.date.outputs.value }}
+            # Branch push: :main + :<short-sha>
             type=ref,event=branch
             type=sha,format=short,prefix=
-            # PRs from same repo: hermes-console:pr-<n>
-            type=ref,event=pr
             # Semver tags (v1.2.3 → 1.2.3 + 1.2)
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-            # `latest` only on default branch pushes
+            # :latest only on default-branch push
             type=raw,value=latest,enable={{is_default_branch}}
           labels: |
             org.opencontainers.image.title=hermes-console
@@ -66,6 +87,4 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          # Only amd64 for now — base image `nousresearch/hermes-agent:latest`
-          # is also amd64. Add `linux/arm64` here if upstream publishes it.
           platforms: linux/amd64
