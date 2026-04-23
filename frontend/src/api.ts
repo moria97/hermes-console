@@ -37,6 +37,12 @@ export interface HealthInfo {
   dashboard: string
 }
 
+export interface HermesVersion {
+  raw: string
+  version: string  // "v0.10.0"
+  build: string    // "2026.4.16"
+}
+
 async function j<T>(r: Response): Promise<T> {
   if (!r.ok) throw new Error(`[${r.status}] ${await r.text()}`)
   return r.json() as Promise<T>
@@ -44,6 +50,7 @@ async function j<T>(r: Response): Promise<T> {
 
 export const api = {
   health: () => fetch('/api/console/health').then(j<HealthInfo>),
+  version: () => fetch('/api/console/version').then(j<HermesVersion>),
 
   getSettings: () => fetch('/api/console/settings').then(j<ConsoleSettings>),
   saveSettings: (body: ConsoleSettings) =>

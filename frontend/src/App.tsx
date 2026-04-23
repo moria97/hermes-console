@@ -5,7 +5,7 @@ import {
   Terminal as TerminalIcon,
 } from 'lucide-react'
 import { useEffect, useState } from 'react'
-import { api, HealthInfo } from './api'
+import { api, HealthInfo, HermesVersion } from './api'
 import ChatTab from './tabs/ChatTab'
 import FilesTab from './tabs/FilesTab'
 import SettingsTab from './tabs/SettingsTab'
@@ -23,12 +23,18 @@ const TABS: { key: TabKey; label: string; icon: React.ComponentType<{ size?: num
 export default function App() {
   const [active, setActive] = useState<TabKey>('chat')
   const [health, setHealth] = useState<HealthInfo | null>(null)
+  const [version, setVersion] = useState<HermesVersion | null>(null)
 
   useEffect(() => {
     const tick = () => api.health().then(setHealth).catch(() => setHealth(null))
     tick()
     const id = setInterval(tick, 10000)
     return () => clearInterval(id)
+  }, [])
+
+  // Hermes version is cached server-side; fetch once on mount.
+  useEffect(() => {
+    api.version().then(setVersion).catch(() => setVersion(null))
   }, [])
 
   const gatewayState =
@@ -45,6 +51,18 @@ export default function App() {
         <div className="brand">
           <img className="brand-mark-img" src="/favicon.ico" alt="Hermes" />
           <span className="brand-text">Hermes Console</span>
+          {version?.version && (
+            <span
+              className="brand-version"
+              title={
+                version.build
+                  ? `hermes-agent ${version.version} · build ${version.build}`
+                  : `hermes-agent ${version.version}`
+              }
+            >
+              {version.version}
+            </span>
+          )}
         </div>
 
         <nav className="tabs">
