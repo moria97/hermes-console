@@ -1,0 +1,176 @@
+#!/bin/bash
+# hermes-console supervisor.
+# - hermes-agent gateway runs in a respawn loop so the console can hot-reload
+#   it (kill pidfile → loop respawns with new config.yaml).
+# - hermes dashboard + FastAPI console-ui backend run once.
+#
+# NOTE: no `set -e`. The gateway respawn loop intentionally handles non-zero
+# exits from `wait` when the gateway is SIGTERM'd by the reload endpoint.
+
+# Layout:
+#   DATA_ROOT   = /mnt/data          → user workspace (file tree + shell cwd)
+#   HERMES_HOME = /mnt/data/.hermes  → all hermes-agent state (standard layout)
+DATA_ROOT_DIR="${CONSOLE_DATA_ROOT:-/mnt/data}"
+HERMES_HOME_DIR="${HERMES_HOME:-$DATA_ROOT_DIR/.hermes}"
+CONSOLE_PORT="${PORT:-8000}"
+GATEWAY_PORT=8642
+DASHBOARD_PORT=9119
+SHUTDOWN_FLAG="/tmp/hc-shutdown"
+
+if [ "$(id -u)" = "0" ]; then
+    mkdir -p "$DATA_ROOT_DIR" "$HERMES_HOME_DIR"
+    if [ -n "$HERMES_UID" ] && [ "$HERMES_UID" != "$(id -u hermes)" ]; then
+        usermod -u "$HERMES_UID" hermes
+    fi
+    if [ -n "$HERMES_GID" ] && [ "$HERMES_GID" != "$(id -g hermes)" ]; then
+        groupmod -o -g "$HERMES_GID" hermes 2>/dev/null || true
+    fi
+    chown -R hermes:hermes "$DATA_ROOT_DIR" 2>/dev/null || true
+    # Hermes user's HOME points at DATA_ROOT (workspace) so interactive
+    # shells and git etc. land there. HERMES_HOME lives as a hidden subdir.
+    usermod -d "$DATA_ROOT_DIR" hermes 2>/dev/null || true
+    exec gosu hermes "$0" "$@"
+fi
+
+export HERMES_HOME="$HERMES_HOME_DIR"
+export HOME="$DATA_ROOT_DIR"
+export PATH="/opt/hermes/.venv/bin:/opt/console/.venv/bin:$PATH"
+source /opt/hermes/.venv/bin/activate
+
+# ─── Migration: legacy flat layout → .hermes/ subdir ─────────────────────
+# Previous images kept HERMES_HOME=/mnt/data directly, scattering state at
+# the root. Fold those files into .hermes/ on first boot of the new layout.
+if [ -e "$DATA_ROOT_DIR/config.yaml" ] && [ ! -e "$HERMES_HOME/config.yaml" ]; then
+    echo "[supervisor] migrating legacy flat layout to $HERMES_HOME"
+    mkdir -p "$HERMES_HOME"
+    for item in config.yaml .env SOUL.md gateway.pid gateway.lock gateway_state.json \
+                .cache channel_directory.json console-ui.yaml \
+                bin cron home hooks logs memories plans sessions skills skins workspace; do
+        src="$DATA_ROOT_DIR/$item"
+        if [ -e "$src" ] || [ -L "$src" ]; then
+            mv "$src" "$HERMES_HOME/" 2>/dev/null || rm -rf "$src"
+        fi
+    done
+    # Remove stale self-referential symlink from the old layout.
+    [ -L "$DATA_ROOT_DIR/.hermes" ] && rm -f "$DATA_ROOT_DIR/.hermes"
+fi
+
+mkdir -p "$HERMES_HOME"/{cron,sessions,logs,hooks,memories,skills,skins,plans,workspace,home}
+
+[ -f "$HERMES_HOME/.env" ]        || cp /opt/hermes/.env.example            "$HERMES_HOME/.env"        2>/dev/null || true
+[ -f "$HERMES_HOME/config.yaml" ] || cp /opt/hermes/cli-config.yaml.example "$HERMES_HOME/config.yaml" 2>/dev/null || true
+[ -f "$HERMES_HOME/SOUL.md" ]     || cp /opt/hermes/docker/SOUL.md          "$HERMES_HOME/SOUL.md"     2>/dev/null || true
+[ -d /opt/hermes/skills ] && python3 /opt/hermes/tools/skills_sync.py >/dev/null 2>&1 || true
+
+# Seed $DATA_ROOT/.bashrc for the web terminal so venv bin dirs stay on PATH
+# even after /etc/profile resets it (bash -l behavior).
+# Always rewrite the managed block so existing volumes pick up any changes
+# (colors, prompt, aliases). Non-managed user edits above/below are preserved.
+BASHRC="$DATA_ROOT_DIR/.bashrc"
+if [ -f "$BASHRC" ]; then
+    sed -i '/# CONSOLE-PATH-BEGIN/,/# CONSOLE-PATH-END/d' "$BASHRC"
+fi
+cat >> "$BASHRC" <<'EOF'
+# CONSOLE-PATH-BEGIN (managed by hermes-console start.sh — do not edit)
+export PATH="/opt/hermes/.venv/bin:/opt/console/.venv/bin:$PATH"
+export HERMES_HOME="${HERMES_HOME:-/mnt/data/.hermes}"
+# Colorized ls + grep output — makes the web terminal readable (paths
+# were plain white before, hard to distinguish dirs from files).
+if [ -x /usr/bin/dircolors ]; then
+    eval "$(dircolors -b)"
+fi
+alias ls='ls --color=auto'
+alias ll='ls -alF --color=auto'
+alias la='ls -A --color=auto'
+alias grep='grep --color=auto'
+export LESS='-R'
+# Prompt: green user@host + blue cwd, two-line for long paths
+export PS1='\[\033[1;32m\]\u@hermes\[\033[0m\]:\[\033[1;34m\]\w\[\033[0m\]\$ '
+# CONSOLE-PATH-END
+EOF
+
+# Apply console settings → hermes config.yaml before starting the gateway.
+cd /opt/console/backend
+python3 -c "
+from app.core import settings_store, hermes_config
+hermes_config.sync_providers(settings_store.load())
+" 2>/dev/null || true
+
+export API_SERVER_ENABLED="${API_SERVER_ENABLED:-true}"
+export API_SERVER_HOST="${API_SERVER_HOST:-127.0.0.1}"
+
+rm -f "$SHUTDOWN_FLAG"
+
+GATEWAY_LOOP_PID=""
+DASHBOARD_PID=""
+CONSOLE_PID=""
+
+cleanup() {
+    touch "$SHUTDOWN_FLAG"
+    # SIGTERM the running gateway via pidfile so the respawn loop exits cleanly.
+    if [ -f "$HERMES_HOME/gateway.pid" ]; then
+        gw_pid=$(python3 -c "import json,sys; d=open('$HERMES_HOME/gateway.pid').read().strip(); print(json.loads(d).get('pid','') if d.startswith('{') else d)" 2>/dev/null)
+        [ -n "$gw_pid" ] && kill -TERM "$gw_pid" 2>/dev/null || true
+    fi
+    [ -n "$GATEWAY_LOOP_PID" ] && kill -TERM "$GATEWAY_LOOP_PID" 2>/dev/null || true
+    [ -n "$DASHBOARD_PID" ]    && kill -TERM "$DASHBOARD_PID"    2>/dev/null || true
+    [ -n "$CONSOLE_PID" ]      && kill -TERM "$CONSOLE_PID"      2>/dev/null || true
+    wait 2>/dev/null || true
+}
+trap cleanup SIGTERM SIGINT
+
+# ─── Gateway respawn loop ────────────────────────────────────────────────
+# When the console POSTs /api/console/settings/reload-gateway, it sends
+# SIGTERM via the pidfile; this loop sees the gateway exit and starts a
+# fresh one with the updated config.yaml.
+(
+    trap 'kill -TERM "$GW_CHILD" 2>/dev/null; wait; exit 0' SIGTERM
+    while [ ! -f "$SHUTDOWN_FLAG" ]; do
+        echo "[supervisor] starting hermes gateway"
+        hermes gateway run &
+        GW_CHILD=$!
+        wait "$GW_CHILD"
+        code=$?
+        if [ -f "$SHUTDOWN_FLAG" ]; then
+            exit 0
+        fi
+        echo "[supervisor] gateway exited (code=$code), respawning in 2s"
+        sleep 2
+    done
+) &
+GATEWAY_LOOP_PID=$!
+
+# Wait for initial gateway readiness.
+for i in $(seq 1 90); do
+    if curl -fsS "http://127.0.0.1:$GATEWAY_PORT/health" >/dev/null 2>&1; then
+        echo "[supervisor] gateway healthy"
+        break
+    fi
+    if ! kill -0 "$GATEWAY_LOOP_PID" 2>/dev/null; then
+        echo "[supervisor] gateway loop died during startup"
+        exit 1
+    fi
+    sleep 1
+done
+
+echo "[supervisor] hermes dashboard → :$DASHBOARD_PORT"
+hermes dashboard >/dev/null 2>&1 &
+DASHBOARD_PID=$!
+
+echo "[supervisor] console backend → :$CONSOLE_PORT"
+cd /opt/console
+PYTHONPATH=/opt/console/backend \
+CONSOLE_STATIC_DIR=/opt/console/web \
+HERMES_GATEWAY_URL="http://127.0.0.1:$GATEWAY_PORT" \
+HERMES_DASHBOARD_URL="http://127.0.0.1:$DASHBOARD_PORT" \
+HERMES_GATEWAY_PIDFILE="$HERMES_HOME/gateway.pid" \
+/opt/console/.venv/bin/uvicorn app.main:app \
+    --host 0.0.0.0 --port "$CONSOLE_PORT" \
+    --log-level info &
+CONSOLE_PID=$!
+
+# Console backend is the primary process. If it dies, tear down everything.
+wait "$CONSOLE_PID"
+code=$?
+cleanup
+exit $code

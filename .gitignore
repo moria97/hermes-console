@@ -1,0 +1,58 @@
+# ─── secrets ─────────────────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+**/credentials.json
+
+# ─── python ──────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.Python
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+env/
+
+# ─── node ────────────────────────────────────────────────────────────
+node_modules/
+.pnpm-store/
+pnpm-debug.log*
+npm-debug.log*
+yarn-error.log*
+.npm/
+
+# ─── build output ────────────────────────────────────────────────────
+frontend/dist/
+frontend/.vite/
+backend/dist/
+*.tsbuildinfo
+
+# ─── editors / IDE ───────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*.sublime-*
+.claude/
+
+# ─── OS cruft ────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ─── logs / tmp ──────────────────────────────────────────────────────
+*.log
+logs/
+tmp/
+*.tmp
+*.bak
+
+# ─── docker ──────────────────────────────────────────────────────────
+# docker-compose.override.yml is expected to be per-dev
+docker-compose.override.yml

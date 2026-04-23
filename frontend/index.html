@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" type="image/x-icon" href="/favicon.ico" />
+    <title>Hermes Console</title>
+    <script>
+      // Nuke any Service Worker cached from a prior hermes-workspace install.
+      // Detect + unregister + clear caches + reload once, so the next load is
+      // guaranteed clean. Uses sessionStorage to break the reload loop.
+      (async function () {
+        if (!('serviceWorker' in navigator)) return
+        try {
+          const regs = await navigator.serviceWorker.getRegistrations()
+          const hasStale = regs.length > 0
+          const alreadyReloaded = sessionStorage.getItem('hc-sw-nuked') === '1'
+          if (hasStale) {
+            await Promise.all(regs.map((r) => r.unregister().catch(() => {})))
+          }
+          if ('caches' in window) {
+            try {
+              const keys = await caches.keys()
+              await Promise.all(keys.map((k) => caches.delete(k).catch(() => {})))
+            } catch (_) {}
+          }
+          if (hasStale && !alreadyReloaded) {
+            sessionStorage.setItem('hc-sw-nuked', '1')
+            location.reload()
+          }
+        } catch (_) {
+          /* ignore */
+        }
+      })()
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

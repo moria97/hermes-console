@@ -1,0 +1,88 @@
+import {
+  FolderOpen,
+  MessageSquare,
+  Settings as SettingsIcon,
+  Terminal as TerminalIcon,
+} from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { api, HealthInfo } from './api'
+import ChatTab from './tabs/ChatTab'
+import FilesTab from './tabs/FilesTab'
+import SettingsTab from './tabs/SettingsTab'
+import TerminalTab from './tabs/TerminalTab'
+
+type TabKey = 'chat' | 'files' | 'terminal' | 'settings'
+
+const TABS: { key: TabKey; label: string; icon: React.ComponentType<{ size?: number }> }[] = [
+  { key: 'chat', label: '聊天', icon: MessageSquare },
+  { key: 'files', label: '文件', icon: FolderOpen },
+  { key: 'terminal', label: '终端', icon: TerminalIcon },
+  { key: 'settings', label: '设置', icon: SettingsIcon },
+]
+
+export default function App() {
+  const [active, setActive] = useState<TabKey>('chat')
+  const [health, setHealth] = useState<HealthInfo | null>(null)
+
+  useEffect(() => {
+    const tick = () => api.health().then(setHealth).catch(() => setHealth(null))
+    tick()
+    const id = setInterval(tick, 10000)
+    return () => clearInterval(id)
+  }, [])
+
+  const gatewayState =
+    !health ? 'bad' : health.gateway === 'ok' ? 'ok' : 'warn'
+  const gatewayText = !health
+    ? '后端不可达'
+    : health.gateway === 'ok'
+      ? 'Gateway 在线'
+      : `Gateway ${health.gateway}`
+
+  return (
+    <div className="app">
+      <header className="topbar">
+        <div className="brand">
+          <img className="brand-mark-img" src="/favicon.ico" alt="Hermes" />
+          <span className="brand-text">Hermes Console</span>
+        </div>
+
+        <nav className="tabs">
+          {TABS.map((t) => {
+            const Icon = t.icon
+            return (
+              <button
+                key={t.key}
+                className={`tab-btn ${active === t.key ? 'active' : ''}`}
+                onClick={() => setActive(t.key)}
+              >
+                <Icon size={15} />
+                {t.label}
+              </button>
+            )
+          })}
+        </nav>
+
+        <div className="status-pill">
+          <span className={`status-dot ${gatewayState === 'ok' ? '' : gatewayState}`} />
+          {gatewayText}
+        </div>
+      </header>
+
+      <main className="panes">
+        <div className="pane" hidden={active !== 'chat'}>
+          <ChatTab />
+        </div>
+        <div className="pane" hidden={active !== 'files'}>
+          <FilesTab />
+        </div>
+        <div className="pane" hidden={active !== 'terminal'}>
+          <TerminalTab visible={active === 'terminal'} />
+        </div>
+        <div className="pane" hidden={active !== 'settings'}>
+          <SettingsTab />
+        </div>
+      </main>
+    </div>
+  )
+}
