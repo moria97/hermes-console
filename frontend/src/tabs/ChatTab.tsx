@@ -56,6 +56,71 @@ async function parseSSE(
 // need server-side persistence — see README.
 const LS_MESSAGES = 'hc-chat-messages'
 
+// Translate raw HTTP errors / fetch exceptions into something a non-engineer
+// can act on. Common cases right after saving settings:
+//   - the gateway is mid-respawn (~30s window) → connection refused / 502
+//   - bailian wasn't enabled or no API key → hermes complains about missing
+//     provider / model
+function explainChatError(status: number, body: string): string {
+  const lower = body.toLowerCase()
+
+  // Network unreachable / gateway down — fetch sometimes returns 0 status,
+  // sometimes our proxy translates to 502/503/504.
+  if (status === 0 || status === 502 || status === 503 || status === 504) {
+    return [
+      '⚠️ 网关暂时不可用',
+      '',
+      '可能原因：',
+      '• 刚保存了设置，gateway 正在重启（约 30 秒）',
+      '• hermes-agent 服务还没起来',
+      '',
+      '请稍候片刻再试。',
+    ].join('\n')
+  }
+
+  // Provider / model misconfiguration.
+  if (
+    lower.includes('no provider') ||
+    lower.includes('no model') ||
+    lower.includes('api key') ||
+    lower.includes('apikey') ||
+    lower.includes('unauthorized') ||
+    status === 401 ||
+    status === 403
+  ) {
+    return [
+      '⚠️ 模型未配置或配置无效',
+      '',
+      '请去 **设置 → 百炼**：',
+      '1. 填写 API Key',
+      '2. 选择服务端点（百炼 API / Token Plan / Coding Plan）',
+      '3. 选一个默认模型',
+      '4. 启用并保存',
+      '',
+      `服务端原始响应（${status}）：`,
+      '```',
+      body.slice(0, 500),
+      '```',
+    ].join('\n')
+  }
+
+  // Fall back to raw error.
+  return `[${status}] ${body || '(空响应体)'}`
+}
+
+function explainFetchError(err: unknown): string {
+  const msg = err instanceof Error ? err.message : String(err)
+  if (/failed to fetch|networkerror|load failed/i.test(msg)) {
+    return [
+      '⚠️ 网络中断 / 网关不可达',
+      '',
+      'gateway 可能正在重启（设置保存后约 30 秒），或者后端服务挂了。',
+      '请稍候再试，如持续不行检查 `docker logs hermes-console`。',
+    ].join('\n')
+  }
+  return msg
+}
+
 function loadMessages(): Message[] {
   try {
     const raw = localStorage.getItem(LS_MESSAGES)
@@ -182,7 +247,7 @@ export default function ChatTab() {
         signal: ctrl.signal,
       })
       if (!r.ok) {
-        setAssistantError(`[${r.status}] ${await r.text()}`)
+        setAssistantError(explainChatError(r.status, await r.text()))
         return
       }
       await parseSSE(r.body!.getReader(), (event, data) => {
@@ -211,7 +276,7 @@ export default function ChatTab() {
       })
     } catch (err: any) {
       if (err.name !== 'AbortError') {
-        setAssistantError(String(err.message ?? err))
+        setAssistantError(explainFetchError(err))
       }
     } finally {
       setStreaming(false)
@@ -248,7 +313,7 @@ export default function ChatTab() {
         <div className="chat-model-tag" title="在「设置 → 百炼」里切换默认模型">
           <span className="chat-model-tag-label">model</span>
           <span className="chat-model-tag-value">
-            {currentModel || '(未配置)'}
+            {currentModel || '—'}
           </span>
         </div>
         <span className="chat-toolbar-spacer" />

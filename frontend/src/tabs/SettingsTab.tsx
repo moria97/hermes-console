@@ -1,8 +1,5 @@
 import {
-  Bell,
   CheckCircle2,
-  Cpu,
-  MessageCircle,
   RefreshCw,
   Save,
   XCircle,
@@ -165,24 +162,24 @@ export default function SettingsTab() {
 
   if (loading) return <div className="editor-placeholder">加载中…</div>
 
-  const SECTION_META: Record<Section, { label: string; Icon: React.ComponentType<{ size?: number }> }> = {
-    bailian: { label: '百炼 (DashScope)', Icon: Cpu },
-    feishu: { label: '飞书', Icon: MessageCircle },
-    dingtalk: { label: '钉钉', Icon: Bell },
+  const SECTION_META: Record<Section, { label: string; icon: string }> = {
+    bailian: { label: '百炼', icon: '/brand/bailian.png' },
+    feishu: { label: '飞书', icon: '/brand/feishu.webp' },
+    dingtalk: { label: '钉钉', icon: '/brand/dingtalk.webp' },
   }
 
   return (
     <div className="settings">
       <nav className="settings-nav">
         {(Object.keys(SECTION_META) as Section[]).map((s) => {
-          const { label, Icon } = SECTION_META[s]
+          const { label, icon } = SECTION_META[s]
           return (
             <button
               key={s}
               className={section === s ? 'active' : ''}
               onClick={() => setSection(s)}
             >
-              <Icon size={15} />
+              <img className="brand-ico" src={icon} alt={label} />
               {label}
             </button>
           )
@@ -193,7 +190,7 @@ export default function SettingsTab() {
         {section === 'bailian' && (
           <div className="settings-card">
             <h2>
-              <Cpu size={18} />
+              <img className="brand-ico lg" src="/brand/bailian.png" alt="百炼" />
               百炼 / DashScope OpenAI 兼容
             </h2>
             <p className="desc">
@@ -291,7 +288,7 @@ export default function SettingsTab() {
         {section === 'feishu' && (
           <div className="settings-card">
             <h2>
-              <MessageCircle size={18} />
+              <img className="brand-ico lg" src="/brand/feishu.webp" alt="飞书" />
               飞书
             </h2>
             <p className="desc">
@@ -332,7 +329,7 @@ export default function SettingsTab() {
         {section === 'dingtalk' && (
           <div className="settings-card">
             <h2>
-              <Bell size={18} />
+              <img className="brand-ico lg" src="/brand/dingtalk.webp" alt="钉钉" />
               钉钉
             </h2>
             <p className="desc">

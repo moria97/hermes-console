@@ -62,6 +62,28 @@ mkdir -p "$HERMES_HOME"/{cron,sessions,logs,hooks,memories,skills,skins,plans,wo
 [ -f "$HERMES_HOME/SOUL.md" ]     || cp /opt/hermes/docker/SOUL.md          "$HERMES_HOME/SOUL.md"     2>/dev/null || true
 [ -d /opt/hermes/skills ] && python3 /opt/hermes/tools/skills_sync.py >/dev/null 2>&1 || true
 
+# Normalize the upstream cli-config.yaml.example placeholder model
+# (`anthropic/claude-opus-4.6`) to `qwen3.6-plus`. We're a bailian-first
+# console; the opus default both confuses users and makes hermes try to
+# call an Anthropic key that isn't set. Idempotent — only triggers when
+# the value is exactly the upstream placeholder.
+python3 - "$HERMES_HOME/config.yaml" <<'PYEOF' 2>/dev/null || true
+import sys, yaml
+from pathlib import Path
+p = Path(sys.argv[1])
+if not p.exists():
+    sys.exit()
+try:
+    cfg = yaml.safe_load(p.read_text()) or {}
+except yaml.YAMLError:
+    sys.exit()
+m = cfg.get('model')
+if isinstance(m, dict) and m.get('default') == 'anthropic/claude-opus-4.6':
+    m['default'] = 'qwen3.6-plus'
+    p.write_text(yaml.safe_dump(cfg, sort_keys=False, allow_unicode=True))
+    print('[start] reset model.default → qwen3.6-plus')
+PYEOF
+
 # Seed $DATA_ROOT/.bashrc for the web terminal so venv bin dirs stay on PATH
 # even after /etc/profile resets it (bash -l behavior).
 # Always rewrite the managed block so existing volumes pick up any changes

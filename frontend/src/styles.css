@@ -175,7 +175,9 @@ button {
   image-rendering: -webkit-optimize-contrast;
 }
 
-/* Small hermes-agent version badge next to the brand text. */
+/* Small hermes-agent version badge next to the brand text. min-width keeps
+   the pill width stable when the placeholder (—) swaps to the real version,
+   so the topbar doesn't visibly stretch on mount. */
 .brand-version {
   font-family: var(--font-mono);
   font-size: 10.5px;
@@ -187,6 +189,8 @@ button {
   border-radius: 999px;
   letter-spacing: 0.2px;
   line-height: 1.3;
+  min-width: 52px;
+  text-align: center;
   white-space: nowrap;
   cursor: default;
   transition: background var(--dur-fast) var(--ease),
@@ -195,6 +199,10 @@ button {
 .brand-version:hover {
   background: rgba(232, 212, 160, 0.12);
   border-color: rgba(232, 212, 160, 0.35);
+}
+.brand-version.is-placeholder {
+  color: var(--text-tertiary);
+  opacity: 0.7;
 }
 
 .tabs {
@@ -566,6 +574,9 @@ input[readonly] {
 .chat-model-tag-value {
   color: var(--accent);
   font-weight: 500;
+  display: inline-block;
+  min-width: 110px;
+  text-align: left;
 }
 
 .chat-model-row {
@@ -1143,6 +1154,21 @@ input[readonly] {
 .settings-nav button svg {
   width: 15px;
   height: 15px;
+}
+
+/* Brand icons (bailian / feishu / dingtalk). All sources are square PNGs
+   with transparent backgrounds (white pixels stripped in postprocess). */
+.brand-ico {
+  width: 16px;
+  height: 16px;
+  object-fit: contain;
+  flex-shrink: 0;
+  display: inline-block;
+  vertical-align: middle;
+}
+.brand-ico.lg {
+  width: 22px;
+  height: 22px;
 }
 
 .settings-body {

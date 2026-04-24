@@ -51,18 +51,20 @@ export default function App() {
         <div className="brand">
           <img className="brand-mark-img" src="/favicon.ico" alt="Hermes" />
           <span className="brand-text">Hermes Console</span>
-          {version?.version && (
-            <span
-              className="brand-version"
-              title={
-                version.build
+          {/* Always render the badge so layout doesn't jump when /api/console/
+             version resolves. Show an em-dash placeholder while loading. */}
+          <span
+            className={`brand-version ${version?.version ? '' : 'is-placeholder'}`}
+            title={
+              version?.version
+                ? version.build
                   ? `hermes-agent ${version.version} · build ${version.build}`
                   : `hermes-agent ${version.version}`
-              }
-            >
-              {version.version}
-            </span>
-          )}
+                : '正在读取 hermes-agent 版本…'
+            }
+          >
+            {version?.version || '—'}
+          </span>
         </div>
 
         <nav className="tabs">
