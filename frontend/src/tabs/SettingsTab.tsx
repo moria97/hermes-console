@@ -6,6 +6,9 @@ import {
 } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { api, ConsoleSettings } from '../api'
+import bailianIcon from '../assets/brand/bailian.png'
+import dingtalkIcon from '../assets/brand/dingtalk.png'
+import feishuIcon from '../assets/brand/feishu.png'
 import Select from '../components/Select'
 import { sortModels } from '../lib'
 
@@ -163,9 +166,9 @@ export default function SettingsTab() {
   if (loading) return <div className="editor-placeholder">加载中…</div>
 
   const SECTION_META: Record<Section, { label: string; icon: string }> = {
-    bailian: { label: '百炼', icon: '/brand/bailian.png' },
-    feishu: { label: '飞书', icon: '/brand/feishu.webp' },
-    dingtalk: { label: '钉钉', icon: '/brand/dingtalk.webp' },
+    bailian: { label: '百炼', icon: bailianIcon },
+    feishu: { label: '飞书', icon: feishuIcon },
+    dingtalk: { label: '钉钉', icon: dingtalkIcon },
   }
 
   return (
@@ -190,7 +193,7 @@ export default function SettingsTab() {
         {section === 'bailian' && (
           <div className="settings-card">
             <h2>
-              <img className="brand-ico lg" src="/brand/bailian.png" alt="百炼" />
+              <img className="brand-ico lg" src={bailianIcon} alt="百炼" />
               百炼 / DashScope OpenAI 兼容
             </h2>
             <p className="desc">
@@ -288,7 +291,7 @@ export default function SettingsTab() {
         {section === 'feishu' && (
           <div className="settings-card">
             <h2>
-              <img className="brand-ico lg" src="/brand/feishu.webp" alt="飞书" />
+              <img className="brand-ico lg" src={feishuIcon} alt="飞书" />
               飞书
             </h2>
             <p className="desc">
@@ -329,7 +332,7 @@ export default function SettingsTab() {
         {section === 'dingtalk' && (
           <div className="settings-card">
             <h2>
-              <img className="brand-ico lg" src="/brand/dingtalk.webp" alt="钉钉" />
+              <img className="brand-ico lg" src={dingtalkIcon} alt="钉钉" />
               钉钉
             </h2>
             <p className="desc">
