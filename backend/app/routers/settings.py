@@ -8,7 +8,7 @@ from fastapi import APIRouter, HTTPException
 
 from ..config import HERMES_GATEWAY_PIDFILE, HERMES_GATEWAY_URL
 from ..core import settings_store
-from ..models.schemas import BailianConfig, ConsoleSettings
+from ..models.schemas import ConsoleSettings, TestProviderRequest
 
 log = logging.getLogger(__name__)
 
@@ -30,15 +30,51 @@ def update_settings(body: ConsoleSettings) -> ConsoleSettings:
         raise HTTPException(500, f"failed to persist settings: {e}")
 
 
-@router.post("/test-bailian")
-async def test_bailian(cfg: BailianConfig):
-    """Ping the Bailian endpoint with the supplied key; report reachable + models count."""
+@router.post("/test-model")
+async def test_model(cfg: TestProviderRequest):
+    """Two-mode probe:
+
+    - mode=="fetch": GET {base_url}/models — returns the model list for the
+      UI's multi-select. Validates auth as a side effect (401 on bad key).
+    - mode=="auth": POST {base_url}/chat/completions with a 1-token probe.
+      Used when /models isn't exposed (Bailian Coding Plan returns 404 there).
+      Validates that the supplied API key is accepted by the endpoint.
+    """
     if not cfg.api_key:
         raise HTTPException(400, "api_key required")
-    url = f"{cfg.base_url.rstrip('/')}/models"
+    base = cfg.base_url.rstrip("/")
+    headers = {"Authorization": f"Bearer {cfg.api_key}"}
+
+    if cfg.mode == "auth":
+        if not cfg.model:
+            raise HTTPException(400, "model required for auth-mode probe")
+        url = f"{base}/chat/completions"
+        payload = {
+            "model": cfg.model,
+            "messages": [{"role": "user", "content": "ping"}],
+            "max_tokens": 1,
+        }
+        async with httpx.AsyncClient(timeout=15.0) as c:
+            try:
+                r = await c.post(url, headers=headers, json=payload)
+            except httpx.HTTPError as e:
+                raise HTTPException(502, f"unreachable: {e}")
+        # 200 = success. 400 with model-not-found is also "auth ok, just
+        # bad model id" — but for our ping that's still a failure (the user
+        # picked a model the endpoint won't serve), so surface it.
+        if r.status_code in (401, 403):
+            raise HTTPException(r.status_code, "认证失败：API Key 无效或无权访问该端点")
+        if r.status_code == 404:
+            raise HTTPException(404, "端点不存在：请检查 Base URL")
+        if not r.is_success:
+            raise HTTPException(r.status_code, r.text[:500])
+        return {"ok": True, "models": []}
+
+    # mode == "fetch"
+    url = f"{base}/models"
     async with httpx.AsyncClient(timeout=10.0) as c:
         try:
-            r = await c.get(url, headers={"Authorization": f"Bearer {cfg.api_key}"})
+            r = await c.get(url, headers=headers)
         except httpx.HTTPError as e:
             raise HTTPException(502, f"unreachable: {e}")
     if not r.is_success:
@@ -112,9 +148,28 @@ async def reload_gateway():
 
     log.info("sent SIGTERM to gateway pid=%s", pid)
 
-    exited = await _wait_pid_exit(pid, timeout_s=10.0)
+    # Hermes gateway needs to drain Lark/dingtalk WebSockets + any in-flight
+    # /v1/chat/completions stream before exiting cleanly — empirically this
+    # often takes 10-25s. 30s grace before we escalate.
+    exited = await _wait_pid_exit(pid, timeout_s=30.0)
     if not exited:
-        raise HTTPException(504, f"gateway pid={pid} did not exit within 10s")
+        # SIGTERM unhonored — common cause: an in-flight LLM call to a slow
+        # or unresponsive upstream provider isn't honoring cancellation, so
+        # the gateway hangs in shutdown forever and the start.sh `wait`
+        # never advances to the respawn branch. Force-kill to unstick the
+        # supervisor; SQLite WAL on state.db tolerates abrupt termination.
+        log.warning(
+            "gateway pid=%s ignored SIGTERM after 30s, escalating to SIGKILL", pid,
+        )
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        exited = await _wait_pid_exit(pid, timeout_s=5.0)
+        if not exited:
+            raise HTTPException(
+                504, f"gateway pid={pid} did not exit even after SIGKILL",
+            )
 
     ready = await _wait_gateway_health(timeout_s=45.0)
     if not ready:

@@ -7,7 +7,7 @@ from starlette.requests import Request
 
 from .config import STATIC_DIR
 from .proxy import http_proxy, ws_proxy
-from .routers import files, health, settings, terminal
+from .routers import files, health, sessions, settings, terminal
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
@@ -17,6 +17,7 @@ app = FastAPI(title="Hermes Console", version="0.1.0")
 app.include_router(health.router)
 app.include_router(files.router)
 app.include_router(settings.router)
+app.include_router(sessions.router)
 app.include_router(terminal.router)
 app.include_router(http_proxy.router)
 app.include_router(ws_proxy.router)

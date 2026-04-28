@@ -579,6 +579,24 @@ input[readonly] {
   text-align: left;
 }
 
+/* Empty state — render the tag as a button that jumps to 快速设置. */
+button.chat-model-tag {
+  font: inherit;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  cursor: pointer;
+}
+.chat-model-tag-empty {
+  border-color: rgba(232, 212, 160, 0.32);
+}
+.chat-model-tag-empty:hover {
+  background: rgba(232, 212, 160, 0.16);
+  border-color: var(--accent);
+}
+.chat-model-tag-empty .chat-model-tag-value {
+  color: var(--text-gold);
+}
+
 .chat-model-row {
   padding: 14px 14px 12px;
   border-bottom: 1px solid var(--border-subtle);
@@ -607,6 +625,99 @@ input[readonly] {
   flex-direction: column;
   min-width: 0;
   background: var(--bg-base);
+}
+
+/* Sidebar listing recent hermes sessions (read from state.db). */
+.chat-sidebar {
+  width: 280px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-surface);
+  border-right: 1px solid var(--border-subtle);
+  min-width: 0;
+}
+.chat-sidebar-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 12px 10px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.chat-sidebar-header > .btn.primary {
+  flex: 1;
+  justify-content: center;
+}
+.chat-sidebar-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 6px 6px 12px;
+}
+.chat-sidebar-empty {
+  padding: 16px 12px;
+  color: var(--text-tertiary);
+  font-size: 12.5px;
+}
+.chat-session-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-sm);
+  padding: 9px 10px;
+  cursor: pointer;
+  font: inherit;
+  color: var(--text-primary);
+  transition: background var(--dur-fast) var(--ease);
+}
+.chat-session-row:hover {
+  background: var(--bg-hover);
+}
+.chat-session-row.active {
+  background: var(--accent-soft);
+}
+.chat-session-row.active .chat-session-row-title {
+  color: var(--accent);
+}
+.chat-session-row:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.chat-session-row-title {
+  font-size: 13px;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-primary);
+}
+.chat-session-row-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  color: var(--text-tertiary);
+  overflow: hidden;
+}
+.chat-session-row-meta > span {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Tiny session-id pill in the toolbar — confirms which session the next
+   send will continue. */
+.chat-session-id-tag {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-tertiary);
+  background: var(--bg-input);
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border-subtle);
 }
 .chat-log {
   flex: 1;
@@ -1109,6 +1220,43 @@ input[readonly] {
    Settings
    ─────────────────────────────────────────────────────────────────── */
 
+.settings-page {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+.settings-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 8px 16px 0;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--bg-surface);
+  flex-shrink: 0;
+}
+.settings-tabs button {
+  background: transparent;
+  color: var(--text-secondary);
+  border: 0;
+  padding: 10px 18px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  margin-bottom: -1px;
+  border-bottom: 2px solid transparent;
+  transition: color var(--dur-fast) var(--ease),
+    border-color var(--dur-fast) var(--ease);
+}
+.settings-tabs button:hover {
+  color: var(--text-primary);
+}
+.settings-tabs button.active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+  font-weight: 600;
+}
+
 .settings {
   display: flex;
   flex: 1;
@@ -1323,6 +1471,290 @@ pre.output.ok {
 }
 pre.output.err {
   color: var(--danger);
+}
+
+/* Info banner under the top tabs — points users at config.yaml / terminal
+   for advanced config that the quick-setup UI doesn't expose. */
+.settings-info-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 18px;
+  background: var(--accent-soft);
+  border-bottom: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  line-height: 1.5;
+  flex-shrink: 0;
+}
+.settings-info-banner svg {
+  color: var(--accent);
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+.settings-info-banner code {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  background: var(--bg-input);
+  padding: 1px 5px;
+  border-radius: 3px;
+  border: 1px solid var(--border-subtle);
+}
+.link-btn {
+  background: transparent;
+  border: 0;
+  padding: 0;
+  color: var(--accent);
+  font: inherit;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.link-btn:hover {
+  color: var(--accent-hover);
+}
+
+/* Model list (Settings → 模型配置 tab) */
+.model-list {
+  /* Full-width: the model grid wraps responsively, no benefit to capping. */
+  max-width: none;
+}
+.auto-save-hint {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 12px;
+  color: var(--text-tertiary);
+  margin-bottom: 14px;
+  min-height: 18px;
+}
+.auto-save-hint .inline-msg {
+  font-size: 12px;
+}
+.model-empty {
+  color: var(--text-tertiary);
+  font-size: 13px;
+  padding: 18px 0 4px;
+}
+.model-empty.inline {
+  padding: 8px 0;
+}
+.add-model-btn {
+  width: 100%;
+  justify-content: center;
+  padding: 10px;
+  border-style: dashed;
+  margin-bottom: 20px;
+  color: var(--text-secondary);
+}
+.add-model-btn:hover {
+  color: var(--text-primary);
+  border-style: dashed;
+}
+
+/* Provider group: header w/ title + edit/delete + grid of model pills */
+.provider-group {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  padding: 18px 22px 20px;
+  margin-bottom: 16px;
+  box-shadow: var(--shadow-md);
+}
+.provider-group-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 14px;
+  gap: 12px;
+}
+.provider-group-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.provider-group-title h3 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.provider-group-actions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+/* Model pills (one per selected model) */
+.model-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 10px;
+}
+.model-pill {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  background: var(--bg-input);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  transition: border-color var(--dur-fast) var(--ease),
+    background var(--dur-fast) var(--ease);
+}
+.model-pill.enabled {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.model-pill-main {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  flex: 1;
+}
+.model-pill-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.model-pill-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 11px;
+  color: var(--accent);
+  background: var(--accent-soft);
+  padding: 2px 6px;
+  border-radius: 10px;
+  width: fit-content;
+}
+.model-pill.enabled .model-pill-badge {
+  background: var(--bg-surface);
+}
+
+/* Provider editor modal */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 24px;
+  overflow-y: auto;
+}
+.modal {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-md);
+  padding: 24px 28px;
+  width: 560px;
+  max-width: 100%;
+  max-height: calc(100vh - 48px);
+  overflow-y: auto;
+}
+.modal h2 {
+  margin: 0 0 18px;
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+.modal-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+/* Provider type radio grid (4 options, 2x2) */
+.provider-type-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.provider-type-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  background: var(--bg-input);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-size: 13px;
+  transition: border-color var(--dur-fast) var(--ease),
+    background var(--dur-fast) var(--ease);
+}
+.provider-type-option:hover {
+  border-color: var(--border-strong);
+}
+.provider-type-option.active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 600;
+}
+.provider-type-option input[type='radio'] {
+  accent-color: var(--accent);
+  margin: 0;
+  flex-shrink: 0;
+}
+
+/* Multi-select model checklist inside the modal */
+.model-selection-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.model-checklist {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 240px;
+  overflow-y: auto;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 6px 8px;
+  background: var(--bg-input);
+}
+.model-checklist-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 4px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-size: 13px;
+}
+.model-checklist-item:hover {
+  background: var(--bg-hover);
+}
+.model-checklist-item input[type='checkbox'] {
+  accent-color: var(--accent);
+  margin: 0;
+  flex-shrink: 0;
+}
+.model-checklist-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* ───────────────────────────────────────────────────────────────────

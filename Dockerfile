@@ -17,13 +17,35 @@ USER root
 
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
-      curl ca-certificates tini python3 python3-venv python3-pip \
+      curl ca-certificates tini python3 python3-venv python3-pip sudo \
  && rm -rf /var/lib/apt/lists/*
+
+# Grant the hermes runtime user passwordless sudo so scripts run from the web
+# terminal / hooks can perform privileged ops (apt install, chown, systemd-less
+# service tweaks, etc.) without prompting.
+RUN echo 'hermes ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/hermes-nopasswd \
+ && chmod 0440 /etc/sudoers.d/hermes-nopasswd
 
 # Install dingtalk-stream into the hermes-agent venv so the dingtalk platform
 # adapter can start. feishu/lark SDK is already bundled upstream.
 RUN /opt/hermes/.venv/bin/python -m ensurepip --upgrade \
  && /opt/hermes/.venv/bin/python -m pip install --no-cache-dir dingtalk-stream
+
+# Install agent-browser + Chromium so hermes' browser_navigate / browser_click
+# / browser_snapshot tools work out of the box (no Browserbase / Browser-Use
+# cloud key required). `agent-browser install --with-deps` does TWO things:
+#   1. apt-get installs the C libs Chromium needs (nss, fonts, libdrm, ...)
+#   2. Downloads Chrome into ~/.agent-browser/browsers/ (HOME-based, NOT
+#      Playwright's $PLAYWRIGHT_BROWSERS_PATH despite the name similarity).
+# Since this RUN is as root, Chrome lands in /root/.agent-browser. We move it
+# to /opt/agent-browser, chown to hermes, and start.sh symlinks the runtime
+# user's ~/.agent-browser → /opt/agent-browser at boot.
+RUN npm install -g agent-browser \
+ && agent-browser install --with-deps \
+ && mv /root/.agent-browser /opt/agent-browser \
+ && chown -R hermes:hermes /opt/agent-browser \
+ && chmod -R go+rX /opt/agent-browser \
+ && rm -rf /var/lib/apt/lists/* /root/.npm
 
 # Build the console-ui Python venv using the runtime's python3 so shebangs match.
 COPY backend/requirements.txt /opt/console/requirements.txt

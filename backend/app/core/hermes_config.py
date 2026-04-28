@@ -4,29 +4,42 @@ Keeps ~/.hermes/config.yaml's `custom_providers` and `platforms.*` in sync
 with what the user configured through the console. Other fields are left
 untouched.
 
-Platform config shape follows upstream `gateway/config.py::PlatformConfig`:
+Each console-managed provider entry in config.yaml has shape:
+
+    custom_providers:
+      - name: bailian-tokenplan-1
+        base_url: https://...
+        api_key: sk-...
+        api_mode: chat_completions             # marker → "console-managed"
+        console_provider_type: tokenplan       # UI preset id (round-trip)
+        console_models: [qwen3.6-plus, glm-5]  # user-selected model cards
+
+Hermes reads providers via plain `dict.get()` (`hermes_cli/providers.py`)
+so the extra `console_*` fields are silently ignored at load.
+
+Platform config follows upstream `gateway/config.py::PlatformConfig`:
 
     platforms:
-      feishu:
-        enabled: true
-        extra: { app_id: "...", app_secret: "..." }
-      dingtalk:
-        enabled: true
-        extra: { client_id: "...", client_secret: "..." }
+      feishu:    { enabled: true, extra: {app_id, app_secret} }
+      dingtalk:  { enabled: true, extra: {client_id, client_secret} }
 """
 import threading
 from pathlib import Path
 import yaml
 
 from ..config import HERMES_CONFIG_PATH, HERMES_HOME
-from ..models.schemas import ConsoleSettings
+from ..models.schemas import ConsoleSettings, ProviderConfig
 
 _lock = threading.Lock()
 
-BAILIAN_PROVIDER_NAME = "bailian"
+# Marker in api_mode field — every console-managed provider uses this value.
+CONSOLE_API_MODE = "chat_completions"
+# Extra keys we tack onto custom_providers entries for UI round-tripping.
+CONSOLE_TYPE_KEY = "console_provider_type"
+CONSOLE_MODELS_KEY = "console_models"
+
 HERMES_ENV_PATH = HERMES_HOME / ".env"
 
-# Env vars we manage; anything not in this set is preserved untouched.
 MANAGED_ENV_KEYS = {
     "DINGTALK_CLIENT_ID",
     "DINGTALK_CLIENT_SECRET",
@@ -41,7 +54,6 @@ def _upsert_env(path: Path, updates: dict[str, str]) -> None:
     if path.exists():
         existing = path.read_text().splitlines()
 
-    # Strip prior managed entries; keep everything else.
     preserved = []
     for line in existing:
         stripped = line.strip()
@@ -51,7 +63,6 @@ def _upsert_env(path: Path, updates: dict[str, str]) -> None:
                 continue
         preserved.append(line)
 
-    # Append fresh managed block.
     if any(v for v in updates.values()):
         if preserved and preserved[-1].strip() != "":
             preserved.append("")
@@ -84,50 +95,104 @@ def _write_hermes_config(data: dict) -> None:
     tmp.replace(path)
 
 
-def _sync_bailian(cfg: dict, settings: ConsoleSettings) -> None:
-    """Keep the bailian entry in `custom_providers` whenever there are
-    credentials to preserve — even when the user toggles it off. "Disabled"
-    just means the top-level `provider` field points elsewhere so hermes
-    doesn't route to bailian. This way toggling off/on doesn't wipe the
-    user's API key."""
-    providers = [p for p in (cfg.get("custom_providers") or [])
-                 if p.get("name") != BAILIAN_PROVIDER_NAME]
-    b = settings.bailian
+def _ensure_unique_names(providers: list[ProviderConfig]) -> list[ProviderConfig]:
+    """Auto-fill blank names + de-duplicate so each entry maps to a distinct
+    custom_providers row. Names follow `bailian-{type}-{n}` for built-in
+    presets, `provider-{n}` for custom."""
+    seen: set[str] = set()
+    out: list[ProviderConfig] = []
+    for i, p in enumerate(providers):
+        name = (p.name or "").strip()
+        if not name:
+            stem = (
+                f"bailian-{p.type}" if p.type in {"public", "tokenplan", "coding"}
+                else "provider"
+            )
+            name = f"{stem}-{i + 1}"
+        base = name
+        n = 1
+        while name in seen:
+            n += 1
+            name = f"{base}-{n}"
+        seen.add(name)
+        out.append(p.model_copy(update={"name": name}))
+    return out
 
-    if b.api_key:
-        providers.append({
-            "name": BAILIAN_PROVIDER_NAME,
-            "base_url": b.base_url,
-            "api_key": b.api_key,
-            "api_mode": "chat_completions",
+
+def _sync_providers_to_yaml(cfg: dict, settings: ConsoleSettings) -> ConsoleSettings:
+    """Rewrite custom_providers from the provider list and apply the
+    user-selected (active_provider, active_model) as cfg.provider /
+    model.default. Returns the normalized settings (with auto-filled
+    provider names + cleared actives if invalid)."""
+    providers = _ensure_unique_names(settings.providers)
+
+    # Drop console-managed entries; preserve any other custom_providers the
+    # user may have hand-edited into config.yaml.
+    keep = [
+        p for p in (cfg.get("custom_providers") or [])
+        if p.get("api_mode") != CONSOLE_API_MODE
+    ]
+
+    new_entries = []
+    for p in providers:
+        if not p.api_key:
+            continue  # skip empty placeholders
+        new_entries.append({
+            "name": p.name,
+            "base_url": p.base_url,
+            "api_key": p.api_key,
+            "api_mode": CONSOLE_API_MODE,
+            CONSOLE_TYPE_KEY: p.type,
+            CONSOLE_MODELS_KEY: list(p.models),
         })
+    cfg["custom_providers"] = keep + new_entries
 
     model_cfg = cfg.get("model")
     if not isinstance(model_cfg, dict):
         model_cfg = {}
 
-    if b.enabled and b.api_key:
-        cfg["provider"] = BAILIAN_PROVIDER_NAME
-        model_cfg["default"] = b.default_model
-        model_cfg["provider"] = BAILIAN_PROVIDER_NAME
-        model_cfg["base_url"] = b.base_url
+    managed_names = {p.name for p in providers}
+
+    # Validate the active selection: provider must exist + have credentials,
+    # active_model must be in that provider's selected models list.
+    active = next((p for p in providers if p.name == settings.active_provider), None)
+    if (
+        active
+        and active.api_key
+        and settings.active_model
+        and settings.active_model in active.models
+    ):
+        cfg["provider"] = active.name
+        model_cfg["default"] = settings.active_model
+        model_cfg["provider"] = active.name
+        model_cfg["base_url"] = active.base_url
+        new_active_provider = active.name
+        new_active_model = settings.active_model
     else:
-        # Disabled: flip provider off bailian but leave credentials/model-
-        # defaults alone so re-enable is one toggle away.
-        if cfg.get("provider") == BAILIAN_PROVIDER_NAME:
+        # No valid active selection: flip provider off any console-managed
+        # entry but leave model.default alone so re-enable is one click away.
+        if cfg.get("provider") in managed_names:
             cfg["provider"] = "auto"
-        if model_cfg.get("provider") == BAILIAN_PROVIDER_NAME:
+        if model_cfg.get("provider") in managed_names:
             model_cfg["provider"] = "auto"
+        new_active_provider = ""
+        new_active_model = ""
 
     cfg["model"] = model_cfg
-    cfg["custom_providers"] = providers
+    return settings.model_copy(update={
+        "providers": providers,
+        "active_provider": new_active_provider,
+        "active_model": new_active_model,
+    })
 
 
 def _sync_platforms(cfg: dict, settings: ConsoleSettings) -> None:
+    """Channel `enabled` is derived from credential presence — the UI no
+    longer exposes an explicit toggle."""
     platforms = cfg.get("platforms") or {}
 
     f = settings.feishu
-    if f.enabled and f.app_id and f.app_secret:
+    if f.app_id and f.app_secret:
         existing = platforms.get("feishu") or {}
         extra = dict(existing.get("extra") or {})
         extra["app_id"] = f.app_id
@@ -138,7 +203,7 @@ def _sync_platforms(cfg: dict, settings: ConsoleSettings) -> None:
             platforms["feishu"] = {**platforms["feishu"], "enabled": False}
 
     d = settings.dingtalk
-    if d.enabled and d.client_id and d.client_secret:
+    if d.client_id and d.client_secret:
         existing = platforms.get("dingtalk") or {}
         extra = dict(existing.get("extra") or {})
         extra["client_id"] = d.client_id
@@ -152,35 +217,30 @@ def _sync_platforms(cfg: dict, settings: ConsoleSettings) -> None:
 
 
 def _sync_env(settings: ConsoleSettings) -> None:
-    """Mirror platform credentials into ~/.hermes/.env.
-
-    Hermes's dingtalk `check_dingtalk_requirements` only reads env vars, not
-    config.yaml — so platforms.dingtalk entries alone don't satisfy the
-    startup gate. We write the managed keys here and the gateway picks them
-    up via load_hermes_dotenv() on next start.
-    """
+    """Mirror platform credentials into ~/.hermes/.env. Hermes' dingtalk
+    `check_dingtalk_requirements` only reads env vars, not config.yaml."""
     updates: dict[str, str] = {}
     d = settings.dingtalk
-    if d.enabled and d.client_id and d.client_secret:
+    if d.client_id and d.client_secret:
         updates["DINGTALK_CLIENT_ID"] = d.client_id
         updates["DINGTALK_CLIENT_SECRET"] = d.client_secret
     f = settings.feishu
-    if f.enabled and f.app_id and f.app_secret:
+    if f.app_id and f.app_secret:
         updates["FEISHU_APP_ID"] = f.app_id
         updates["FEISHU_APP_SECRET"] = f.app_secret
     _upsert_env(HERMES_ENV_PATH, updates)
 
 
-def sync_providers(settings: ConsoleSettings) -> None:
+def sync_providers(settings: ConsoleSettings) -> ConsoleSettings:
     """Sync all console settings into hermes config.yaml + .env.
 
-    Name kept as `sync_providers` for backward compatibility with existing
-    callers; now covers providers, platforms, and required env vars in one
-    atomic write.
+    Returns the settings with auto-filled provider names + validated active
+    selection so the caller can echo the canonical form back to the client.
     """
     with _lock:
         cfg = _load_hermes_config()
-        _sync_bailian(cfg, settings)
+        normalized = _sync_providers_to_yaml(cfg, settings)
         _sync_platforms(cfg, settings)
         _write_hermes_config(cfg)
         _sync_env(settings)
+    return normalized

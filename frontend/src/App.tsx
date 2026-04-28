@@ -17,11 +17,13 @@ const TABS: { key: TabKey; label: string; icon: React.ComponentType<{ size?: num
   { key: 'chat', label: '聊天', icon: MessageSquare },
   { key: 'files', label: '文件', icon: FolderOpen },
   { key: 'terminal', label: '终端', icon: TerminalIcon },
-  { key: 'settings', label: '设置', icon: SettingsIcon },
+  { key: 'settings', label: '快速设置', icon: SettingsIcon },
 ]
 
 export default function App() {
-  const [active, setActive] = useState<TabKey>('chat')
+  // null while we're deciding the initial tab — avoids a chat→settings flicker
+  // for first-run users who land directly on the Settings tab.
+  const [active, setActive] = useState<TabKey | null>(null)
   const [health, setHealth] = useState<HealthInfo | null>(null)
   const [version, setVersion] = useState<HermesVersion | null>(null)
 
@@ -35,6 +37,15 @@ export default function App() {
   // Hermes version is cached server-side; fetch once on mount.
   useEffect(() => {
     api.version().then(setVersion).catch(() => setVersion(null))
+  }, [])
+
+  // Pick the initial tab based on whether the user has any model providers
+  // configured: empty → drop them on 快速设置 to add one, otherwise → 聊天.
+  useEffect(() => {
+    api
+      .getSettings()
+      .then((s) => setActive(s.providers.length === 0 ? 'settings' : 'chat'))
+      .catch(() => setActive('chat'))
   }, [])
 
   const gatewayState =
@@ -91,7 +102,7 @@ export default function App() {
 
       <main className="panes">
         <div className="pane" hidden={active !== 'chat'}>
-          <ChatTab />
+          <ChatTab onNavigateToSettings={() => setActive('settings')} />
         </div>
         <div className="pane" hidden={active !== 'files'}>
           <FilesTab />
@@ -100,7 +111,7 @@ export default function App() {
           <TerminalTab visible={active === 'terminal'} />
         </div>
         <div className="pane" hidden={active !== 'settings'}>
-          <SettingsTab />
+          <SettingsTab onNavigateToTerminal={() => setActive('terminal')} />
         </div>
       </main>
     </div>

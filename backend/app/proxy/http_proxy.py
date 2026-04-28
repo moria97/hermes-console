@@ -1,11 +1,18 @@
 """Transparent HTTP proxy → hermes gateway, SSE-safe."""
 import httpx
 from fastapi import APIRouter, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
-from ..config import HERMES_DASHBOARD_URL, HERMES_GATEWAY_URL
+from ..config import HERMES_API_KEY, HERMES_DASHBOARD_URL, HERMES_GATEWAY_URL
 
 router = APIRouter()
+
+# When the upstream is mid-restart we get ConnectError / ConnectTimeout from
+# httpx because the listener isn't up yet. Surface a deliberate 503 + JSON
+# body instead of letting FastAPI's default exception handler turn it into a
+# generic 500 — the frontend can then show a friendly "请稍候" message.
+GATEWAY_RESTART_MSG = "网关重启中，请稍候…"
+_RESTART_EXC = (httpx.ConnectError, httpx.ConnectTimeout)
 
 HOP_BY_HOP = {
     "connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
@@ -19,9 +26,15 @@ HOP_BY_HOP = {
 REQUEST_STRIP = HOP_BY_HOP | {"origin", "referer", "cookie"}
 
 
-async def _proxy(upstream_base: str, path: str, request: Request) -> StreamingResponse:
+async def _proxy(upstream_base: str, path: str, request: Request):
     upstream = f"{upstream_base.rstrip('/')}/{path}"
     headers = {k: v for k, v in request.headers.items() if k.lower() not in REQUEST_STRIP}
+    # Auto-attach the gateway API key on hermes-bound requests. Required for
+    # X-Hermes-Session-Id continuation (hermes refuses to load session history
+    # without an authenticated bearer). Always overrides whatever the browser
+    # might have sent.
+    if upstream_base == HERMES_GATEWAY_URL and HERMES_API_KEY:
+        headers["authorization"] = f"Bearer {HERMES_API_KEY}"
 
     client = httpx.AsyncClient(timeout=None)
     req = client.build_request(
@@ -30,7 +43,21 @@ async def _proxy(upstream_base: str, path: str, request: Request) -> StreamingRe
         content=request.stream(),
         params=request.query_params,
     )
-    resp = await client.send(req, stream=True)
+    try:
+        resp = await client.send(req, stream=True)
+    except _RESTART_EXC:
+        await client.aclose()
+        return JSONResponse(
+            {"detail": GATEWAY_RESTART_MSG},
+            status_code=503,
+            headers={"Retry-After": "3"},
+        )
+    except httpx.HTTPError as e:
+        await client.aclose()
+        return JSONResponse(
+            {"detail": f"网关连接失败: {e}"},
+            status_code=502,
+        )
 
     resp_headers = {k: v for k, v in resp.headers.items() if k.lower() not in HOP_BY_HOP}
 
