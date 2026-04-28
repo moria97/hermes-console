@@ -125,4 +125,9 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
     CMD curl -fsS http://127.0.0.1:8000/api/console/health >/dev/null || exit 1
 
-ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/start.sh"]
+# `-s` makes tini register as a child subreaper via prctl(2), so it still
+# reaps zombies correctly when the runtime (k8s pod init, docker-init flag,
+# Aliyun ACK, etc.) keeps a different process at PID 1 and runs tini below it.
+# Without this, hermes' subprocess churn (chrome, hooks, gosu shells) leaks
+# zombies until the container is restarted.
+ENTRYPOINT ["/usr/bin/tini", "-s", "--", "/usr/local/bin/start.sh"]

@@ -1,5 +1,6 @@
 import {
   FolderOpen,
+  LayoutDashboard,
   MessageSquare,
   Settings as SettingsIcon,
   Terminal as TerminalIcon,
@@ -7,14 +8,16 @@ import {
 import { useEffect, useState } from 'react'
 import { api, HealthInfo, HermesVersion } from './api'
 import ChatTab from './tabs/ChatTab'
+import DashboardTab from './tabs/DashboardTab'
 import FilesTab from './tabs/FilesTab'
 import SettingsTab from './tabs/SettingsTab'
 import TerminalTab from './tabs/TerminalTab'
 
-type TabKey = 'chat' | 'files' | 'terminal' | 'settings'
+type TabKey = 'chat' | 'dashboard' | 'files' | 'terminal' | 'settings'
 
 const TABS: { key: TabKey; label: string; icon: React.ComponentType<{ size?: number }> }[] = [
   { key: 'chat', label: '聊天', icon: MessageSquare },
+  { key: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { key: 'files', label: '文件', icon: FolderOpen },
   { key: 'terminal', label: '终端', icon: TerminalIcon },
   { key: 'settings', label: '快速设置', icon: SettingsIcon },
@@ -103,6 +106,9 @@ export default function App() {
       <main className="panes">
         <div className="pane" hidden={active !== 'chat'}>
           <ChatTab onNavigateToSettings={() => setActive('settings')} />
+        </div>
+        <div className="pane" hidden={active !== 'dashboard'}>
+          <DashboardTab visible={active === 'dashboard'} />
         </div>
         <div className="pane" hidden={active !== 'files'}>
           <FilesTab />

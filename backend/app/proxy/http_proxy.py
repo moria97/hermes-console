@@ -1,7 +1,9 @@
 """Transparent HTTP proxy → hermes gateway, SSE-safe."""
+import re
+
 import httpx
 from fastapi import APIRouter, Request
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from ..config import HERMES_API_KEY, HERMES_DASHBOARD_URL, HERMES_GATEWAY_URL
 
@@ -101,6 +103,90 @@ async def gateway_responses(path: str, request: Request):
 
 # Dashboard stays behind an explicit prefix so it doesn't collide with
 # `/api/console/*`. Register on main.py AFTER console routers.
+
+# Rewrite `src="/foo"` / `href="/foo"` (but skip `/api/dashboard/...`) so the
+# dashboard SPA's hardcoded asset paths resolve through this proxy when it's
+# wrapped in an iframe at our origin.
+_DASH_ABS_PATH_RE = re.compile(
+    r'((?:src|href)\s*=\s*")(/(?!api/dashboard/)(?!//)[^"]*)"'
+)
+
+# Injected ahead of the dashboard's main bundle: wraps fetch/XHR so any
+# absolute /api/* path the dashboard JS calls at runtime is rerouted through
+# the /api/dashboard/ prefix that this proxy actually forwards.
+_DASH_FETCH_SHIM = """<script>(function(){
+var PFX='/api/dashboard';
+function rw(u){
+  if(typeof u!=='string')return u;
+  if(u.charAt(0)==='/'&&u.indexOf(PFX)!==0&&u.charAt(1)!=='/')return PFX+u;
+  return u;
+}
+var of=window.fetch;
+window.fetch=function(input,init){
+  if(typeof input==='string')input=rw(input);
+  else if(input&&typeof Request!=='undefined'&&input instanceof Request){
+    try{
+      var url=new URL(input.url);
+      if(url.origin===window.location.origin){
+        var p=url.pathname+url.search+url.hash;
+        var rp=rw(p);
+        if(rp!==p)input=new Request(window.location.origin+rp,input);
+      }
+    }catch(e){}
+  }
+  return of.call(this,input,init);
+};
+var oo=XMLHttpRequest.prototype.open;
+XMLHttpRequest.prototype.open=function(m,u){
+  var args=Array.prototype.slice.call(arguments,2);
+  return oo.apply(this,[m,rw(u)].concat(args));
+};
+})();</script>"""
+
+
+def _rewrite_dashboard_html(body: bytes) -> bytes:
+    text = body.decode("utf-8", errors="replace")
+    text = _DASH_ABS_PATH_RE.sub(r'\1/api/dashboard\2"', text)
+    # Slip the shim in right after <head>; it must run before the bundled
+    # main script so fetch is wrapped before the dashboard issues calls.
+    text = text.replace("<head>", "<head>" + _DASH_FETCH_SHIM, 1)
+    return text.encode("utf-8")
+
+
 @router.api_route("/api/dashboard/{path:path}", methods=_GATEWAY_METHODS)
 async def dashboard_proxy(path: str, request: Request):
-    return await _proxy(HERMES_DASHBOARD_URL, path, request)
+    # For HTML responses (the dashboard root + any pushState fallbacks),
+    # buffer + rewrite. Everything else streams as-is via _proxy().
+    if request.method.upper() not in {"GET", "HEAD"}:
+        return await _proxy(HERMES_DASHBOARD_URL, path, request)
+
+    upstream = f"{HERMES_DASHBOARD_URL.rstrip('/')}/{path}"
+    headers = {k: v for k, v in request.headers.items() if k.lower() not in REQUEST_STRIP}
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            r = await client.get(upstream, headers=headers, params=request.query_params)
+    except _RESTART_EXC:
+        return JSONResponse(
+            {"detail": GATEWAY_RESTART_MSG}, status_code=503,
+            headers={"Retry-After": "3"},
+        )
+    except httpx.HTTPError as e:
+        return JSONResponse({"detail": f"dashboard 连接失败: {e}"}, status_code=502)
+
+    content_type = (r.headers.get("content-type") or "").lower()
+    resp_headers = {k: v for k, v in r.headers.items() if k.lower() not in HOP_BY_HOP}
+
+    if "text/html" in content_type:
+        body = _rewrite_dashboard_html(r.content)
+        # content-length will be wrong post-rewrite — drop it; FastAPI's
+        # Response will compute the right one for the new body.
+        resp_headers.pop("content-length", None)
+        return Response(
+            content=body, status_code=r.status_code,
+            headers=resp_headers, media_type=content_type,
+        )
+    return Response(
+        content=r.content, status_code=r.status_code,
+        headers=resp_headers, media_type=content_type or None,
+    )
