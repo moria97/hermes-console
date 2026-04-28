@@ -8,11 +8,13 @@ the localStorage-only mirror it used before.
 Connection mode is `mode=ro` URI so we never contend with hermes' writer
 on the same db file (WAL mode keeps that mostly painless either way).
 """
+import ast
 import json
 import logging
+import os
 import re
 import sqlite3
-from typing import Any
+from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException
 
@@ -22,6 +24,31 @@ router = APIRouter(prefix="/api/console/sessions", tags=["sessions"])
 log = logging.getLogger(__name__)
 
 DB_PATH = HERMES_HOME / "state.db"
+AGENT_LOG_PATH = HERMES_HOME / "logs" / "agent.log"
+
+# Match hermes' run_agent.py error format:
+#   YYYY-MM-DD HH:MM:SS,mmm ERROR [<session_id>] root: Non-retryable client error: Error code: 400 - {...python dict repr...}
+_ERR_RE = re.compile(
+    r"^(?P<ts>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3})\s+"
+    r"(?P<level>ERROR|WARNING)\s+"
+    r"\[(?P<session>[^\]]+)\]\s+"
+    r"(?P<logger>[\w.]+):\s+"
+    r"(?P<rest>.+)$"
+)
+
+
+def _tail_bytes(path, n_bytes: int = 200_000) -> str:
+    """Return roughly the last n_bytes of a (possibly large) log file as a
+    UTF-8 string, partial first line discarded."""
+    try:
+        size = os.path.getsize(path)
+    except OSError:
+        return ""
+    with open(path, "rb") as f:
+        if size > n_bytes:
+            f.seek(size - n_bytes)
+            f.readline()  # discard the partial line at the seek boundary
+        return f.read().decode("utf-8", errors="replace")
 
 # Patterns that mark a session as a non-user-chat sub-call. These are
 # completion calls hermes / open-webui / similar wrappers make on the user's
@@ -107,6 +134,68 @@ def list_sessions(limit: int = 50, include_internal: bool = False):
         out.append(d)
         if len(out) >= limit:
             break
+    return out
+
+
+@router.get("/{session_id}/last-error")
+def get_session_last_error(session_id: str):
+    """Scan the tail of `~/.hermes/logs/agent.log` for the most recent
+    ERROR/WARNING line tagged with this session id.
+
+    The chat UI calls this whenever a chat completion silently returns
+    an empty stream (hermes wraps upstream 4xx/5xx as 200 + zero tokens
+    instead of propagating the error), so the frontend can show the real
+    cause — most often "model not activated on this Bailian key" or a
+    quota / auth failure.
+    """
+    if not AGENT_LOG_PATH.exists():
+        return {"found": False}
+
+    sid_marker = f"[{session_id}]"
+    tail = _tail_bytes(AGENT_LOG_PATH, 300_000)
+    matches = []
+    for line in tail.splitlines():
+        if sid_marker not in line:
+            continue
+        m = _ERR_RE.match(line)
+        if not m:
+            continue
+        matches.append(m.groupdict())
+
+    if not matches:
+        return {"found": False}
+
+    last = matches[-1]
+    rest = last["rest"]
+    out = {
+        "found": True,
+        "ts": last["ts"],
+        "level": last["level"],
+        "logger": last["logger"],
+        "raw": rest,
+        "summary": rest,
+        "status_code": None,
+        "upstream_message": None,
+    }
+    # Try to parse: "Non-retryable client error: Error code: 400 - {...dict...}"
+    code_m = re.search(r"Error code:\s*(\d+)\s*-\s*(.+)$", rest)
+    if code_m:
+        out["status_code"] = int(code_m.group(1))
+        body = code_m.group(2).strip()
+        # The body is a Python dict repr (single quotes, None) — try ast first.
+        parsed: Optional[dict] = None
+        try:
+            parsed = ast.literal_eval(body)
+        except (ValueError, SyntaxError):
+            try:
+                parsed = json.loads(body)
+            except json.JSONDecodeError:
+                parsed = None
+        if isinstance(parsed, dict):
+            err = parsed.get("error")
+            if isinstance(err, dict):
+                out["upstream_message"] = err.get("message")
+                out["summary"] = err.get("message") or out["summary"]
     return out
 
 

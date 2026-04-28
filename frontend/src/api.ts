@@ -154,6 +154,22 @@ export const api = {
     fetch(`/api/console/sessions?limit=${limit}`).then(j<HermesSessionRow[]>),
   getSession: (id: string) =>
     fetch(`/api/console/sessions/${encodeURIComponent(id)}`).then(j<HermesSessionDetail>),
+  // Pulls the most recent ERROR/WARNING line tagged with this session id from
+  // hermes' agent.log — used to recover the upstream cause when a chat
+  // completion comes back with zero content (silent-fail).
+  getSessionLastError: (id: string) =>
+    fetch(`/api/console/sessions/${encodeURIComponent(id)}/last-error`).then(
+      j<{
+        found: boolean
+        ts?: string
+        level?: string
+        logger?: string
+        raw?: string
+        summary?: string
+        status_code?: number | null
+        upstream_message?: string | null
+      }>,
+    ),
 
   // Gateway paths are forwarded 1:1 — same URLs as raw hermes / OpenAI
   // clients. The console backend only strips CSRF-adjacent headers before

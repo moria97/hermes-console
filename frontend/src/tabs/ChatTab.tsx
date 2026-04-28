@@ -1,18 +1,30 @@
-import { MessageSquare, Plus, RefreshCw, Send, Square } from 'lucide-react'
+import { Check, Loader2, MessageSquare, Plus, RefreshCw, Send, Square } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkBreaks from 'remark-breaks'
 import remarkGfm from 'remark-gfm'
 import { api, HermesMessageRow, HermesSessionRow } from '../api'
 
+type ToolStatus = 'running' | 'done'
+
 type MessageItem =
   | { type: 'text'; text: string }
-  | { type: 'tool'; tool: string; emoji: string; label: string }
+  | { type: 'tool'; tool: string; emoji: string; label: string; status?: ToolStatus }
+
+// Per-turn streaming phase, used to render a status pill while we wait for
+// hermes events. Hermes only emits three signals (initial role chunk,
+// `hermes.tool.progress`, content deltas, [DONE]) — we infer the phase
+// transitions to give the user something to look at instead of a frozen
+// blinking cursor when a tool runs for 30+ seconds.
+type AssistantPhase = 'pending' | 'tool' | 'streaming' | 'done' | 'error'
 
 interface Message {
   role: 'user' | 'assistant'
   items: MessageItem[]
   error?: boolean
+  // Both fields are assistant-only; user messages don't have a phase.
+  phase?: AssistantPhase
+  startedAt?: number
 }
 
 // Convert hermes-stored DB rows → the UI's Message[] shape. Tool/system
@@ -243,6 +255,16 @@ export default function ChatTab({ onNavigateToSettings }: ChatTabProps = {}) {
     logRef.current?.scrollTo({ top: logRef.current.scrollHeight })
   }, [messages])
 
+  // Tick every 400ms while streaming so the "思考中 · X.Xs" / "调用 toolName · X.Xs"
+  // pill counts up — gives the user something to look at during long
+  // tool calls so the UI doesn't feel frozen.
+  const [, setTick] = useState(0)
+  useEffect(() => {
+    if (!streaming) return
+    const id = window.setInterval(() => setTick((t) => t + 1), 400)
+    return () => window.clearInterval(id)
+  }, [streaming])
+
   const openSession = async (id: string) => {
     if (streaming) return
     if (id === currentSessionId) return
@@ -271,29 +293,56 @@ export default function ChatTab({ onNavigateToSettings }: ChatTabProps = {}) {
     setInput('')
   }
 
+  // Mark every still-running tool chip on the active assistant message as
+  // done. Called when content starts streaming (tool finished → LLM is now
+  // writing) or when the stream wraps up.
+  const finalizeTools = (items: MessageItem[]): MessageItem[] =>
+    items.map((it) =>
+      it.type === 'tool' && it.status !== 'done' ? { ...it, status: 'done' } : it,
+    )
+
   const appendText = (delta: string) => {
     setMessages((prev) => {
       const msgs = prev.slice()
       const last = msgs[msgs.length - 1]
       if (!last || last.role !== 'assistant') return prev
-      const items = last.items.slice()
+      let items = last.items.slice()
+      // First content delta after a tool: the tool is implicitly done.
+      if (last.phase !== 'streaming') items = finalizeTools(items)
       const tail = items[items.length - 1]
       if (tail?.type === 'text') {
         items[items.length - 1] = { type: 'text', text: tail.text + delta }
       } else {
         items.push({ type: 'text', text: delta })
       }
-      msgs[msgs.length - 1] = { ...last, items }
+      msgs[msgs.length - 1] = { ...last, items, phase: 'streaming' }
       return msgs
     })
   }
 
-  const pushTool = (chip: Extract<MessageItem, { type: 'tool' }>) => {
+  const pushTool = (chip: Omit<Extract<MessageItem, { type: 'tool' }>, 'status'>) => {
     setMessages((prev) => {
       const msgs = prev.slice()
       const last = msgs[msgs.length - 1]
       if (!last || last.role !== 'assistant') return prev
-      msgs[msgs.length - 1] = { ...last, items: [...last.items, chip] }
+      // A new tool chip means the previous one (if any) has finished.
+      const items = finalizeTools(last.items)
+      items.push({ ...chip, status: 'running' })
+      msgs[msgs.length - 1] = { ...last, items, phase: 'tool' }
+      return msgs
+    })
+  }
+
+  const finalizeAssistant = (errored = false) => {
+    setMessages((prev) => {
+      const msgs = prev.slice()
+      const last = msgs[msgs.length - 1]
+      if (!last || last.role !== 'assistant') return prev
+      msgs[msgs.length - 1] = {
+        ...last,
+        items: finalizeTools(last.items),
+        phase: errored ? 'error' : 'done',
+      }
       return msgs
     })
   }
@@ -301,10 +350,13 @@ export default function ChatTab({ onNavigateToSettings }: ChatTabProps = {}) {
   const setAssistantError = (text: string) => {
     setMessages((prev) => {
       const msgs = prev.slice()
+      const last = msgs[msgs.length - 1]
       msgs[msgs.length - 1] = {
         role: 'assistant',
         items: [{ type: 'text', text }],
         error: true,
+        phase: 'error',
+        startedAt: last?.startedAt,
       }
       return msgs
     })
@@ -323,7 +375,12 @@ export default function ChatTab({ onNavigateToSettings }: ChatTabProps = {}) {
     setMessages((prev) => [
       ...prev,
       { role: 'user', items: [{ type: 'text', text: userText }] },
-      { role: 'assistant', items: [] },
+      {
+        role: 'assistant',
+        items: [],
+        phase: 'pending',
+        startedAt: Date.now(),
+      },
     ])
     setInput('')
     setStreaming(true)
@@ -356,6 +413,16 @@ export default function ChatTab({ onNavigateToSettings }: ChatTabProps = {}) {
         setAssistantError(explainChatError(r.status, await r.text()))
         return
       }
+      // Track whether any visible content arrived, plus the usage block from
+      // the final chunk. If the upstream provider rejects the request (bad
+      // API key, model not activated, quota exhausted) hermes returns a
+      // 200-with-empty-stream instead of propagating the error — the only
+      // tells are zero-content + zero-tokens. We flag that as a silent fail
+      // and surface a diagnostic instead of leaving an empty bubble.
+      let gotContent = false
+      let promptTokens = 0
+      let completionTokens = 0
+      let sawUsage = false
       await parseSSE(r.body!.getReader(), (event, data) => {
         if (event === 'hermes.tool.progress') {
           try {
@@ -374,15 +441,71 @@ export default function ChatTab({ onNavigateToSettings }: ChatTabProps = {}) {
         if (data === '[DONE]') return
         try {
           const j = JSON.parse(data)
+          if (j.usage) {
+            sawUsage = true
+            promptTokens = Number(j.usage.prompt_tokens ?? 0)
+            completionTokens = Number(j.usage.completion_tokens ?? 0)
+          }
           const delta = j.choices?.[0]?.delta?.content
-          if (delta) appendText(delta)
+          if (delta) {
+            gotContent = true
+            appendText(delta)
+          }
         } catch {
           /* ignore partial */
         }
       })
+      // Silent-failure heuristic: hermes returned 200 + a clean stream but
+      // there's no content AND no tokens were billed → upstream definitely
+      // rejected the call (most often: API key not entitled to the chosen
+      // model — Bailian model marketplace商品 like vanchin/*, MiniMax/*,
+      // kimi/* need per-model activation). Tool-chip-only turns also
+      // satisfy !gotContent, so require zero tokens too — a real tool call
+      // always burns prompt tokens.
+      const silentFail =
+        !gotContent &&
+        sawUsage &&
+        promptTokens === 0 &&
+        completionTokens === 0
+      if (silentFail) {
+        // Pull the actual upstream error out of hermes' agent.log so the
+        // user sees the real cause (e.g. "The product is not activated...")
+        // instead of a guess. The endpoint scans the log tail for the most
+        // recent ERROR/WARNING line tagged with this session id.
+        let detail = ''
+        try {
+          const e = await api.getSessionLastError(currentSessionId)
+          if (e.found) {
+            const code = e.status_code ? `HTTP ${e.status_code} · ` : ''
+            const msg = e.upstream_message || e.summary || e.raw || ''
+            detail = `\n\n上游真实错误（${code}${e.ts ?? ''}）：\n> ${msg}`
+          }
+        } catch {
+          /* log lookup is best-effort */
+        }
+        setAssistantError(
+          [
+            '⚠️ 模型未返回任何内容（上游静默失败）',
+            '',
+            '常见原因：',
+            '• 当前 API Key 未开通这个模型 — 百炼模型市场带前缀的商品（`vanchin/...`、`MiniMax/...`、`kimi/...`）需要在控制台单独「立即开通」',
+            '• 模型 ID 拼写错误，不存在于服务端',
+            '• 配额耗尽 / 速率限制',
+            '',
+            '建议在「快速设置 → 模型配置」里换一个已开通的模型重试。',
+          ].join('\n') + detail,
+        )
+      } else {
+        // Stream wrapped up cleanly — flush any still-running chips and mark done.
+        finalizeAssistant(false)
+      }
     } catch (err: any) {
       if (err.name !== 'AbortError') {
         setAssistantError(explainFetchError(err))
+      } else {
+        // User clicked stop: keep what we have, but stamp it as done so
+        // the spinner stops.
+        finalizeAssistant(false)
       }
     } finally {
       setStreaming(false)
@@ -497,7 +620,13 @@ export default function ChatTab({ onNavigateToSettings }: ChatTabProps = {}) {
                   )}
                 </div>
                 <div className={`msg ${m.role}${m.error ? ' error' : ''}`}>
-                  {isEmpty && isLastStreaming && <span className="cursor" />}
+                  {m.role === 'assistant' && isLastStreaming && (
+                    <PhasePill message={m} />
+                  )}
+                  {isEmpty &&
+                    isLastStreaming &&
+                    m.phase !== 'pending' &&
+                    m.phase !== 'tool' && <span className="cursor" />}
                   {m.items.map((it, idx) => {
                     if (it.type === 'tool') {
                       return (
@@ -506,6 +635,7 @@ export default function ChatTab({ onNavigateToSettings }: ChatTabProps = {}) {
                           tool={it.tool}
                           emoji={it.emoji}
                           label={it.label}
+                          status={it.status ?? 'done'}
                         />
                       )
                     }
@@ -519,7 +649,9 @@ export default function ChatTab({ onNavigateToSettings }: ChatTabProps = {}) {
                             {it.text}
                           </ReactMarkdown>
                         )}
-                        {isLastStreaming && isLastItem && <span className="cursor" />}
+                        {isLastStreaming &&
+                          isLastItem &&
+                          m.phase === 'streaming' && <span className="cursor" />}
                       </div>
                     )
                   })}
@@ -564,20 +696,63 @@ export default function ChatTab({ onNavigateToSettings }: ChatTabProps = {}) {
   )
 }
 
-function ToolChip({ tool, emoji, label }: { tool: string; emoji: string; label: string }) {
+function ToolChip({
+  tool,
+  emoji,
+  label,
+  status,
+}: {
+  tool: string
+  emoji: string
+  label: string
+  status: ToolStatus
+}) {
   const [open, setOpen] = useState(false)
   const truncated = label.length > 80 ? label.slice(0, 80) + '…' : label
   const canExpand = label.length > 80
   return (
     <div
-      className={`tool-chip ${open ? 'expanded' : ''}`}
+      className={`tool-chip ${open ? 'expanded' : ''} ${status === 'running' ? 'running' : 'done'}`}
       onClick={() => canExpand && setOpen(!open)}
       role={canExpand ? 'button' : undefined}
       title={canExpand ? (open ? '收起' : '展开') : undefined}
     >
+      {status === 'running' ? (
+        <Loader2 size={13} className="tool-status-icon spin" />
+      ) : (
+        <Check size={13} className="tool-status-icon" />
+      )}
       <span className="tool-emoji">{emoji}</span>
       <span className="tool-name">{tool}</span>
       <span className="tool-label">{open ? label : truncated}</span>
+    </div>
+  )
+}
+
+// Status pill rendered at the top of the actively-streaming assistant
+// message. Re-renders cheaply on tick (Date.now is read inline).
+function PhasePill({ message }: { message: Message }) {
+  const phase = message.phase ?? 'pending'
+  if (phase === 'streaming' || phase === 'done' || phase === 'error') {
+    // Once content is flowing, the cursor + chips already convey progress.
+    return null
+  }
+  const elapsed = message.startedAt
+    ? ((Date.now() - message.startedAt) / 1000).toFixed(1)
+    : '0.0'
+  // For phase=tool, name the in-flight tool so users see which step is slow.
+  let label = '思考中'
+  if (phase === 'tool') {
+    const lastTool = [...message.items]
+      .reverse()
+      .find((it): it is Extract<MessageItem, { type: 'tool' }> => it.type === 'tool')
+    label = lastTool ? `调用 ${lastTool.tool}` : '调用工具中'
+  }
+  return (
+    <div className="msg-phase">
+      <Loader2 size={12} className="spin" />
+      <span>{label}</span>
+      <span className="msg-phase-time">· {elapsed}s</span>
     </div>
   )
 }
