@@ -54,13 +54,30 @@ def _settings_from_config(cfg: dict, env: dict[str, str]) -> ConsoleSettings:
     for entry in (cfg.get("custom_providers") or []):
         if entry.get("api_mode") != hermes_config.CONSOLE_API_MODE:
             continue
-        models = entry.get(hermes_config.CONSOLE_MODELS_KEY) or []
+
+        # New canonical shape: `models` is a dict {id: meta}. Take ids from
+        # keys. Fall back to the legacy `console_models` list for entries
+        # written by older hermes-console releases — they get rewritten to
+        # the canonical shape on the next save.
+        model_ids: list[str] = []
+        models_field = entry.get("models")
+        if isinstance(models_field, dict):
+            model_ids = [k for k in models_field.keys() if isinstance(k, str)]
+        else:
+            legacy = entry.get(hermes_config.LEGACY_MODELS_KEY) or []
+            model_ids = [m for m in legacy if isinstance(m, str)]
+
+        # Preset id is fully determined by base_url, no need to persist it.
+        # Legacy `console_provider_type` is silently ignored (URL wins).
+        base_url = entry.get("base_url", "") or ""
+        provider_type = hermes_config.preset_id_from_url(base_url)
+
         providers.append(ProviderConfig(
             name=entry.get("name", "") or "",
-            type=entry.get(hermes_config.CONSOLE_TYPE_KEY, "custom") or "custom",
-            base_url=entry.get("base_url", "") or "",
+            type=provider_type,
+            base_url=base_url,
             api_key=entry.get("api_key", "") or "",
-            models=[m for m in models if isinstance(m, str)],
+            models=model_ids,
         ))
 
     cfg_provider = cfg.get("provider") or ""

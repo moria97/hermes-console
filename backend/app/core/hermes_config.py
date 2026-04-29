@@ -4,18 +4,27 @@ Keeps ~/.hermes/config.yaml's `custom_providers` and `platforms.*` in sync
 with what the user configured through the console. Other fields are left
 untouched.
 
-Each console-managed provider entry in config.yaml has shape:
+Each console-managed provider entry in config.yaml has the canonical
+hermes shape — every key here is in hermes_cli/config.py's
+`_normalize_custom_provider_entry::_KNOWN_KEYS` whitelist:
 
     custom_providers:
       - name: bailian-tokenplan-1
         base_url: https://...
         api_key: sk-...
         api_mode: chat_completions             # marker → "console-managed"
-        console_provider_type: tokenplan       # UI preset id (round-trip)
-        console_models: [qwen3.6-plus, glm-5]  # user-selected model cards
+        models:                                 # selected model cards (id → meta)
+          qwen3.6-plus: {}                      # empty meta until UI exposes
+          glm-5: {}                             # context_length etc.
 
-Hermes reads providers via plain `dict.get()` (`hermes_cli/providers.py`)
-so the extra `console_*` fields are silently ignored at load.
+The UI preset id (public/tokenplan/coding/custom) is derived from base_url
+at load time — see `_preset_id_from_url` — instead of being persisted.
+
+Earlier versions of hermes-console wrote two non-canonical fields here:
+`console_provider_type` and `console_models`.  hermes ignored them but
+emitted `unknown config keys ignored` warnings on every reload.  The
+settings reader still understands those fields for backward-compat with
+existing volumes; the next save rewrites them to the canonical shape.
 
 Platform config follows upstream `gateway/config.py::PlatformConfig`:
 
@@ -34,9 +43,31 @@ _lock = threading.Lock()
 
 # Marker in api_mode field — every console-managed provider uses this value.
 CONSOLE_API_MODE = "chat_completions"
-# Extra keys we tack onto custom_providers entries for UI round-tripping.
-CONSOLE_TYPE_KEY = "console_provider_type"
-CONSOLE_MODELS_KEY = "console_models"
+# Legacy field names — read-only, for migrating volumes written by older
+# hermes-console releases. We never write these any more.
+LEGACY_MODELS_KEY = "console_models"
+LEGACY_TYPE_KEY = "console_provider_type"
+
+# Canonical preset URLs (must mirror frontend's PROVIDER_PRESETS list).
+_PRESET_URLS = {
+    "public": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    "tokenplan": "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
+    "coding": "https://coding.dashscope.aliyuncs.com/v1",
+}
+
+
+def preset_id_from_url(base_url: str) -> str:
+    """Reverse-lookup a UI preset id from a saved base_url. Used to drop the
+    persisted `console_provider_type` field — preset is fully determined by
+    URL, no need to round-trip it through config.yaml."""
+    if not base_url:
+        return "custom"
+    target = base_url.rstrip("/").lower()
+    for pid, url in _PRESET_URLS.items():
+        if target == url.rstrip("/").lower():
+            return pid
+    return "custom"
+
 
 HERMES_ENV_PATH = HERMES_HOME / ".env"
 
@@ -126,24 +157,42 @@ def _sync_providers_to_yaml(cfg: dict, settings: ConsoleSettings) -> ConsoleSett
     provider names + cleared actives if invalid)."""
     providers = _ensure_unique_names(settings.providers)
 
+    existing = cfg.get("custom_providers") or []
+
+    # Index existing console-managed entries by name so we can preserve any
+    # per-model metadata (context_length, …) the user may have hand-edited
+    # into models[id].* — the UI doesn't expose those today, but rewriting
+    # would silently drop them on every save otherwise.
+    existing_models_meta: dict[str, dict] = {}
+    for e in existing:
+        if e.get("api_mode") != CONSOLE_API_MODE:
+            continue
+        models_field = e.get("models")
+        if isinstance(models_field, dict):
+            existing_models_meta[e.get("name", "")] = models_field
+
     # Drop console-managed entries; preserve any other custom_providers the
     # user may have hand-edited into config.yaml.
-    keep = [
-        p for p in (cfg.get("custom_providers") or [])
-        if p.get("api_mode") != CONSOLE_API_MODE
-    ]
+    keep = [e for e in existing if e.get("api_mode") != CONSOLE_API_MODE]
 
     new_entries = []
     for p in providers:
         if not p.api_key:
             continue  # skip empty placeholders
+        prev_meta = existing_models_meta.get(p.name, {})
+        # Build a canonical {id: meta} dict for hermes' `models` field.
+        # Preserves prior per-model meta when the model id is still selected;
+        # newly-selected models start with an empty meta dict {}.
+        models_dict = {
+            mid: dict(prev_meta.get(mid, {}) or {})
+            for mid in p.models
+        }
         new_entries.append({
             "name": p.name,
             "base_url": p.base_url,
             "api_key": p.api_key,
             "api_mode": CONSOLE_API_MODE,
-            CONSOLE_TYPE_KEY: p.type,
-            CONSOLE_MODELS_KEY: list(p.models),
+            "models": models_dict,
         })
     cfg["custom_providers"] = keep + new_entries
 
