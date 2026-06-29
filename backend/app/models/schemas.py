@@ -13,7 +13,7 @@ class ProviderConfig(BaseModel):
     """
     # custom_providers[i].name in config.yaml — auto-generated on create
     name: str = ""
-    # UI preset: "public" | "tokenplan" | "coding" | "custom"
+    # UI preset: "pai" | "public" | "tokenplan" | "coding" | "custom"
     type: str = "custom"
     base_url: str = ""
     api_key: str = ""

@@ -50,6 +50,7 @@ LEGACY_TYPE_KEY = "console_provider_type"
 
 # Canonical preset URLs (must mirror frontend's PROVIDER_PRESETS list).
 _PRESET_URLS = {
+    "pai": "https://aiservice.cn-beijing.aliyuncs.com/v1",
     "public": "https://dashscope.aliyuncs.com/compatible-mode/v1",
     "tokenplan": "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
     "coding": "https://coding.dashscope.aliyuncs.com/v1",
@@ -137,6 +138,7 @@ def _ensure_unique_names(providers: list[ProviderConfig]) -> list[ProviderConfig
         if not name:
             stem = (
                 f"bailian-{p.type}" if p.type in {"public", "tokenplan", "coding"}
+                else "pai" if p.type == "pai"
                 else "provider"
             )
             name = f"{stem}-{i + 1}"
