@@ -368,7 +368,9 @@ docker run ... -p 127.0.0.1:8000:8000 ...
 
 ## Upgrading hermes-agent base image
 
-If upstream ships a new tag for `nousresearch/hermes-agent`, rebuild and:
+This image pins `nousresearch/hermes-agent:v2026.6.19` instead of tracking the
+rolling `latest` tag. If upstream ships a newer stable tag, bump `Dockerfile`,
+rebuild, and:
 
 1. Check the patch in `Dockerfile` applied cleanly (build log should say
    `feishu.py: patched _connect_with_overrides (sync + no-await)`). If it

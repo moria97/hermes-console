@@ -18,7 +18,7 @@ import { sortModels } from '../lib'
 
 type TopTab = 'models' | 'channels'
 type ChannelSection = 'feishu' | 'dingtalk'
-type ProviderType = 'public' | 'tokenplan' | 'coding' | 'custom'
+type ProviderType = 'pai' | 'public' | 'tokenplan' | 'coding' | 'custom'
 
 interface ProviderPreset {
   id: ProviderType
@@ -36,8 +36,25 @@ const TOKENPLAN_RECOMMENDED = [
   'deepseek-v3.2',
 ]
 const CODING_RECOMMENDED = ['qwen3.6-plus', 'kimi-k2.5', 'glm-5', 'MiniMax-M2.5']
+const PAI_RECOMMENDED = [
+  'qwen3.7-max',
+  'qwen3.7-plus',
+  'qwen3.6-plus',
+  'deepseek-v4-pro',
+  'deepseek-v4-flash',
+  'glm-5.2',
+  'MiniMax/MiniMax-M3',
+  'kimi-k2.7-code',
+]
 
 const PROVIDER_PRESETS: ProviderPreset[] = [
+  {
+    id: 'pai',
+    label: 'PAI 模型服务',
+    url: 'https://aiservice.cn-beijing.aliyuncs.com/v1',
+    supportsFetch: false,
+    recommended: PAI_RECOMMENDED,
+  },
   {
     id: 'public',
     label: '百炼 API',
@@ -69,10 +86,10 @@ const PROVIDER_PRESETS: ProviderPreset[] = [
 ]
 
 const presetById = (id: string) =>
-  PROVIDER_PRESETS.find((p) => p.id === id) ?? PROVIDER_PRESETS[3]
+  PROVIDER_PRESETS.find((p) => p.id === id) ?? PROVIDER_PRESETS[4]
 
 // Models that support image input. Surfaced as a small badge on each card.
-const VISION_MODELS = new Set(['qwen3.6-plus', 'kimi-k2.5'])
+const VISION_MODELS = new Set(['qwen3.7-plus', 'qwen3.6-plus', 'kimi-k2.5'])
 
 // Stale/deprecated model IDs to hide even if the provider returns them.
 const MODEL_DENY = new Set(['qwen3-plus'])
@@ -309,7 +326,7 @@ export default function SettingsTab({ onNavigateToTerminal }: SettingsTabProps =
           </div>
           {settings.providers.length === 0 && (
             <div className="model-empty">
-              暂无 Provider。点击下方“添加 Provider”，从百炼 API / Token Plan / Coding Plan / 自定义端点中挑一种开始。
+              暂无 Provider。点击下方“添加 Provider”，从 PAI 模型服务 / 百炼 API / Token Plan / Coding Plan / 自定义端点中挑一种开始。
             </div>
           )}
           {settings.providers.map((p, i) => (
@@ -548,10 +565,10 @@ interface ProviderEditorProps {
 
 function ProviderEditor({ initial, onCancel, onSave }: ProviderEditorProps) {
   const [type, setType] = useState<ProviderType>(
-    (initial?.type as ProviderType) || 'public',
+    (initial?.type as ProviderType) || 'pai',
   )
   const [baseUrl, setBaseUrl] = useState<string>(
-    initial?.base_url || presetById('public').url,
+    initial?.base_url || presetById('pai').url,
   )
   const [apiKey, setApiKey] = useState<string>(initial?.api_key || '')
   const [available, setAvailable] = useState<string[]>([])
@@ -573,7 +590,10 @@ function ProviderEditor({ initial, onCancel, onSave }: ProviderEditorProps) {
     else setBaseUrl('')
 
     if (preset.recommended.length > 0) {
-      setAvailable(sortModels(preset.recommended))
+      const recommended = sortModels(
+        Array.from(new Set([...preset.recommended, ...Array.from(selected)])),
+      )
+      setAvailable(recommended)
       // First time seeing this preset (no initial of same type) → preselect.
       if (!initial || initial.type !== preset.id) {
         setSelected(new Set(preset.recommended))

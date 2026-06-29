@@ -7,6 +7,7 @@ save we only write those two files (via `hermes_config.sync_providers`).
 The old console-ui.yaml file, if present, is migrated + deleted the first
 time we load.
 """
+import os
 import threading
 from pathlib import Path
 
@@ -24,6 +25,12 @@ from . import hermes_config
 _lock = threading.Lock()
 
 DEFAULT_BAILIAN_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+DEFAULT_PAI_BASE_URL = "https://aiservice.cn-beijing.aliyuncs.com/v1"
+DEFAULT_PAI_MODEL = "qwen3.7-plus"
+PAI_PROVIDER_NAME = "pai-1"
+PAI_TOKEN_SERVICE_URL = "PAI_TOKEN_SERVICE_URL"
+PAI_TOKEN_SERVICE_API_KEY = "PAI_TOKEN_SERVICE_API_KEY"
+PAI_TOKEN_SERVICE_MODEL = "PAI_TOKEN_SERVICE_MODEL"
 
 
 def _read_env_file(path: Path) -> dict[str, str]:
@@ -80,6 +87,36 @@ def _settings_from_config(cfg: dict, env: dict[str, str]) -> ConsoleSettings:
             models=model_ids,
         ))
 
+    pai_url = (
+        os.environ.get(PAI_TOKEN_SERVICE_URL) or env.get(PAI_TOKEN_SERVICE_URL, "")
+    ).strip()
+    pai_key = (
+        os.environ.get(PAI_TOKEN_SERVICE_API_KEY)
+        or env.get(PAI_TOKEN_SERVICE_API_KEY, "")
+    ).strip()
+    pai_model = (
+        os.environ.get(PAI_TOKEN_SERVICE_MODEL) or env.get(PAI_TOKEN_SERVICE_MODEL, "")
+    ).strip() or DEFAULT_PAI_MODEL
+    if pai_key:
+        pai_base_url = pai_url or DEFAULT_PAI_BASE_URL
+        pai = next((p for p in providers if p.name == PAI_PROVIDER_NAME), None)
+        if not pai:
+            pai = next((p for p in providers if p.type == "pai"), None)
+        pai_models = list(pai.models) if pai else []
+        if pai_model not in pai_models:
+            pai_models = [pai_model, *pai_models]
+        next_pai = ProviderConfig(
+            name=pai.name if pai else PAI_PROVIDER_NAME,
+            type="pai",
+            base_url=pai_base_url,
+            api_key=pai_key,
+            models=pai_models,
+        )
+        if pai:
+            providers = [next_pai if p.name == pai.name else p for p in providers]
+        else:
+            providers = [next_pai, *providers]
+
     cfg_provider = cfg.get("provider") or ""
     model_cfg = cfg.get("model") if isinstance(cfg.get("model"), dict) else {}
     cfg_default_model = model_cfg.get("default") or ""
@@ -90,6 +127,12 @@ def _settings_from_config(cfg: dict, env: dict[str, str]) -> ConsoleSettings:
     if matched and cfg_default_model and cfg_default_model in matched.models:
         active_provider = matched.name
         active_model = cfg_default_model
+
+    if pai_key and (not active_provider or (matched and matched.type == "pai")):
+        pai = next((p for p in providers if p.type == "pai"), None)
+        if pai:
+            active_provider = pai.name
+            active_model = pai_model
 
     # ── Feishu / Dingtalk ────────────────────────────────────────────────
     platforms = cfg.get("platforms") or {}
