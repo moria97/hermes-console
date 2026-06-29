@@ -8,7 +8,7 @@ export interface FileNode {
 
 export interface ProviderConfig {
   name: string
-  // UI preset: "public" | "tokenplan" | "coding" | "custom"
+  // UI preset: "pai" | "public" | "tokenplan" | "coding" | "custom"
   type: string
   base_url: string
   api_key: string

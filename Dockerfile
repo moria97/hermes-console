@@ -4,7 +4,7 @@
 
 # ─── stage 1: frontend build (React + Vite + Monaco + xterm) ─────────────
 FROM node:22-slim AS frontend-build
-RUN corepack enable && corepack prepare pnpm@latest --activate
+RUN corepack enable && corepack prepare pnpm@10.28.0 --activate
 WORKDIR /web
 COPY frontend/package.json frontend/pnpm-lock.yaml* ./
 RUN pnpm install --no-frozen-lockfile
@@ -12,7 +12,7 @@ COPY frontend/ ./
 RUN pnpm build
 
 # ─── stage 2: runtime on the agent image ─────────────────────────────────
-FROM nousresearch/hermes-agent:latest
+FROM nousresearch/hermes-agent:v2026.6.19
 USER root
 
 RUN apt-get update \
