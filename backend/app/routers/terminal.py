@@ -53,18 +53,21 @@ async def terminal(ws: WebSocket):
             }))
 
     async def pump_in():
-        while True:
-            msg = await ws.receive_text()
-            try:
-                parsed = json.loads(msg)
-            except json.JSONDecodeError:
-                continue
-            t = parsed.get("type")
-            if t == "input":
-                data = parsed.get("data", "")
-                session.write(data.encode("utf-8"))
-            elif t == "resize":
-                session.resize(int(parsed.get("cols", 80)), int(parsed.get("rows", 24)))
+        try:
+            while True:
+                msg = await ws.receive_text()
+                try:
+                    parsed = json.loads(msg)
+                except json.JSONDecodeError:
+                    continue
+                t = parsed.get("type")
+                if t == "input":
+                    data = parsed.get("data", "")
+                    session.write(data.encode("utf-8"))
+                elif t == "resize":
+                    session.resize(int(parsed.get("cols", 80)), int(parsed.get("rows", 24)))
+        except WebSocketDisconnect:
+            return
 
     out_task = asyncio.create_task(pump_out())
     in_task = asyncio.create_task(pump_in())
@@ -74,8 +77,7 @@ async def terminal(ws: WebSocket):
         )
         for t in pending:
             t.cancel()
-    except WebSocketDisconnect:
-        pass
+        await asyncio.gather(*done, *pending, return_exceptions=True)
     finally:
         session.close()
         try:
