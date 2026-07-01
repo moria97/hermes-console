@@ -43,6 +43,7 @@ _lock = threading.Lock()
 
 # Marker in api_mode field — every console-managed provider uses this value.
 CONSOLE_API_MODE = "chat_completions"
+PAI_CHANNEL = "hermes-agent"
 # Legacy field names — read-only, for migrating volumes written by older
 # hermes-console releases. We never write these any more.
 LEGACY_MODELS_KEY = "console_models"
@@ -50,7 +51,7 @@ LEGACY_TYPE_KEY = "console_provider_type"
 
 # Canonical preset URLs (must mirror frontend's PROVIDER_PRESETS list).
 _PRESET_URLS = {
-    "pai": "https://aiservice.cn-beijing.aliyuncs.com/v1",
+    "pai": "https://cn-beijing.pai-token.aliyuncs.com/v1",
     "public": "https://dashscope.aliyuncs.com/compatible-mode/v1",
     "tokenplan": "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
     "coding": "https://coding.dashscope.aliyuncs.com/v1",
@@ -189,13 +190,16 @@ def _sync_providers_to_yaml(cfg: dict, settings: ConsoleSettings) -> ConsoleSett
             mid: dict(prev_meta.get(mid, {}) or {})
             for mid in p.models
         }
-        new_entries.append({
+        entry = {
             "name": p.name,
             "base_url": p.base_url,
             "api_key": p.api_key,
             "api_mode": CONSOLE_API_MODE,
             "models": models_dict,
-        })
+        }
+        if p.type == "pai":
+            entry["extra_body"] = {"channel": PAI_CHANNEL}
+        new_entries.append(entry)
     cfg["custom_providers"] = keep + new_entries
 
     model_cfg = cfg.get("model")
