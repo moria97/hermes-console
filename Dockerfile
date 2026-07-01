@@ -17,7 +17,7 @@ USER root
 
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
-      curl ca-certificates tini python3 python3-venv python3-pip sudo \
+      curl ca-certificates tini gosu python3 python3-venv python3-pip sudo \
  && rm -rf /var/lib/apt/lists/*
 
 # Grant the hermes runtime user passwordless sudo so scripts run from the web
