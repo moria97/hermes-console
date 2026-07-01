@@ -51,7 +51,7 @@ const PROVIDER_PRESETS: ProviderPreset[] = [
   {
     id: 'pai',
     label: 'PAI 模型服务',
-    url: 'https://aiservice.cn-beijing.aliyuncs.com/v1',
+    url: 'https://cn-beijing.pai-token.aliyuncs.com/v1',
     supportsFetch: false,
     recommended: PAI_RECOMMENDED,
   },

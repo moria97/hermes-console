@@ -25,7 +25,7 @@ from . import hermes_config
 _lock = threading.Lock()
 
 DEFAULT_BAILIAN_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-DEFAULT_PAI_BASE_URL = "https://aiservice.cn-beijing.aliyuncs.com/v1"
+DEFAULT_PAI_BASE_URL = "https://cn-beijing.pai-token.aliyuncs.com/v1"
 DEFAULT_PAI_MODEL = "qwen3.7-plus"
 PAI_PROVIDER_NAME = "pai-1"
 PAI_TOKEN_SERVICE_URL = "PAI_TOKEN_SERVICE_URL"
